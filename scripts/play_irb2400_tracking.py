@@ -28,6 +28,24 @@ def _find_latest_checkpoint(experiment_root: Path) -> str | None:
   return str(best_path) if best_path is not None else None
 
 
+def _compute_env_origins_grid(num_envs: int, env_spacing: float) -> "list[list[float]]":
+  # Match mjlab TerrainImporter._compute_env_origins_grid.
+  import math
+
+  if num_envs <= 0:
+    return []
+  num_rows = math.ceil(num_envs / int(math.sqrt(num_envs)))
+  num_cols = math.ceil(num_envs / num_rows)
+  origins: list[list[float]] = []
+  for i in range(num_envs):
+    ii = i // num_cols
+    jj = i % num_cols
+    x = -((ii) - (num_rows - 1) / 2.0) * float(env_spacing)
+    y = ((jj) - (num_cols - 1) / 2.0) * float(env_spacing)
+    origins.append([x, y, 0.0])
+  return origins
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt (defaults to latest)")
@@ -161,7 +179,63 @@ def main() -> None:
   num_steps = None if int(args.steps) <= 0 else int(args.steps)
   if viewer_backend == "native":
     if args.show_other_envs:
-      NativeMujocoViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+      import mujoco
+
+      class _GridEnvNativeViewer(NativeMujocoViewer):
+        def __init__(self, *a, **kw):
+          super().__init__(*a, **kw)
+          spacing = float(getattr(self.env.unwrapped.scene, "env_spacing", 2.0))
+          self._env_origins = _compute_env_origins_grid(self.env.unwrapped.num_envs, spacing)
+
+        def sync_env_to_viewer(self) -> None:
+          v = self.viewer
+          assert v is not None
+          assert self.mjm is not None and self.mjd is not None and self.vopt is not None
+
+          with self._mj_lock:
+            sim_data = self.env.unwrapped.sim.data
+
+            # Primary env (selected) into mjd.
+            self.mjd.qpos[:] = sim_data.qpos[self.env_idx].cpu().numpy()
+            self.mjd.qvel[:] = sim_data.qvel[self.env_idx].cpu().numpy()
+            if self.mjm.nmocap > 0:
+              self.mjd.mocap_pos[:] = sim_data.mocap_pos[self.env_idx].cpu().numpy()
+              self.mjd.mocap_quat[:] = sim_data.mocap_quat[self.env_idx].cpu().numpy()
+            mujoco.mj_forward(self.mjm, self.mjd)
+
+            v.user_scn.ngeom = 0
+            if self._show_debug_vis and hasattr(self.env.unwrapped, "update_visualizers"):
+              from mjlab.viewer.native.visualizer import MujocoNativeDebugVisualizer
+
+              visualizer = MujocoNativeDebugVisualizer(v.user_scn, self.mjm, self.env_idx)
+              self.env.unwrapped.update_visualizers(visualizer)
+
+            # Render other envs (offset into a grid so they don't overlap).
+            if self.vd is None:
+              self.vd = mujoco.MjData(self.mjm)
+            assert self.pert is not None
+
+            for i in range(self.env.unwrapped.num_envs):
+              if i == self.env_idx:
+                continue
+              self.vd.qpos[:] = sim_data.qpos[i].cpu().numpy()
+              self.vd.qvel[:] = sim_data.qvel[i].cpu().numpy()
+              if self.mjm.nmocap > 0:
+                self.vd.mocap_pos[:] = sim_data.mocap_pos[i].cpu().numpy()
+                self.vd.mocap_quat[:] = sim_data.mocap_quat[i].cpu().numpy()
+              mujoco.mj_forward(self.mjm, self.vd)
+
+              start = int(v.user_scn.ngeom)
+              mujoco.mjv_addGeoms(self.mjm, self.vd, self.vopt, self.pert, self.catmask, v.user_scn)
+              origin = self._env_origins[i]
+              for gi in range(start, int(v.user_scn.ngeom)):
+                v.user_scn.geoms[gi].pos[0] += float(origin[0])
+                v.user_scn.geoms[gi].pos[1] += float(origin[1])
+                v.user_scn.geoms[gi].pos[2] += float(origin[2])
+
+            v.sync(state_only=True)
+
+      _GridEnvNativeViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
     else:
       # By default, render only the selected env. This avoids overlapping robots
       # when the scene spacing is not reflected in the native viewer.
