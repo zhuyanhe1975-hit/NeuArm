@@ -20,12 +20,15 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.viewer import ViewerConfig
 
 from irb2400_rl.robot.irb2400_cfg import Irb2400ActuatorLimits, get_irb2400_robot_cfg
-from irb2400_rl.task.actions import GainScheduledComputedTorqueActionCfg
+from irb2400_rl.task.actions import (
+  GainScheduledComputedTorqueActionCfg,
+  ResidualComputedTorqueActionCfg,
+)
 from irb2400_rl.task.commands import JointTrajectoryCommandCfg
 from irb2400_rl.task import mdp
 
 
-ACTION_TERM_NAME = "gain_sched"
+ACTION_TERM_NAME = "policy"
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,10 @@ class Irb2400TrackingTaskParams:
   # These are deterministic "object model" parameters, not domain randomization.
   dof_damping: tuple[float, ...] = (2.0, 2.0, 1.5, 0.4, 0.3, 0.2)
   dof_frictionloss: tuple[float, ...] = (8.0, 8.0, 6.0, 1.5, 1.0, 0.5)
+  # Policy/controller mode:
+  # - "gain_sched": policy outputs [kp_mult_delta, kd_mult_delta] (12D)
+  # - "residual": policy outputs residual torque (6D)
+  action_mode: str = "gain_sched"
 
 
 def make_irb2400_tracking_env_cfg(
@@ -107,8 +114,13 @@ def make_irb2400_tracking_env_cfg(
     ),
   }
 
-  actions: dict[str, ActionTermCfg] = {
-    ACTION_TERM_NAME: GainScheduledComputedTorqueActionCfg(
+  actions: dict[str, ActionTermCfg] = {}
+  action_mode = (params.action_mode or "gain_sched").strip().lower()
+  if action_mode not in ("gain_sched", "residual"):
+    raise ValueError(f"Unsupported action_mode='{params.action_mode}', expected gain_sched|residual")
+
+  if action_mode == "gain_sched":
+    actions[ACTION_TERM_NAME] = GainScheduledComputedTorqueActionCfg(
       entity_name="robot",
       command_name="traj",
       actuator_names=(r".*joint_[1-6]$",),
@@ -135,8 +147,31 @@ def make_irb2400_tracking_env_cfg(
       gain_filter_tau=0.03,
       ff_mode="ctff",
       ctff_joint_mask=(True, True, True, True, True, False),
-    ),
-  }
+    )
+  else:
+    # Residual torque policy. Default residual authority is off; scripts enable/ramp it.
+    actions[ACTION_TERM_NAME] = ResidualComputedTorqueActionCfg(
+      entity_name="robot",
+      command_name="traj",
+      actuator_names=(r".*joint_[1-6]$",),
+      effort_limit=params.effort_limit,
+      residual_scale=0.0,
+      residual_clip=5.0,
+      residual_ramp_steps=500000,
+      residual_filter_tau=0.03,
+      kp_min=50.0,
+      kp_max=350.0,
+      kd_min=2.0,
+      kd_max=35.0,
+      ki=0.0,
+      err_scale=0.15,
+      err_scale_by_joint=(0.15, 0.15, 0.15, 0.15, 0.15, 0.05),
+      integral_limit=0.2,
+      kp_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 4.0),
+      kd_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 12.0),
+      ff_mode="ctff",
+      ctff_joint_mask=(True, True, True, True, True, False),
+    )
 
   events = {
     # Set plant friction parameters once at startup (applies to all envs).

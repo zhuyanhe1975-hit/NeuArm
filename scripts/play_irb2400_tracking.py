@@ -101,6 +101,13 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt (defaults to latest)")
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
+  parser.add_argument(
+    "--action-mode",
+    type=str,
+    default="auto",
+    choices=("auto", "gain_sched", "residual"),
+    help="Env/controller mode to match the checkpoint. auto reads run_record.json next to the checkpoint.",
+  )
   parser.add_argument("--num-envs", type=int, default=1, help="Number of parallel envs (use ,/. to switch when >1)")
   parser.add_argument("--env-idx", type=int, default=0, help="Initial env index to view")
   parser.add_argument("--show-other-envs", action="store_true", help="Render all envs at once (otherwise only the selected env is shown)")
@@ -118,6 +125,10 @@ def main() -> None:
   parser.add_argument("--cmd-joint-delta-scale", type=float, default=None, help="Override joint_delta_scale (fraction of joint range)")
   parser.add_argument("--cmd-j6-scale", type=float, default=None, help="Override joint 6 scale inside joint_delta_scale_by_joint (others unchanged)")
   parser.add_argument("--steps", type=int, default=0, help="Stop after N env steps (0 = run until window closes)")
+  parser.add_argument("--residual-scale", type=float, default=None, help="Override residual torque scale in play (residual mode only)")
+  parser.add_argument("--residual-clip", type=float, default=None, help="Override residual torque clip in play (residual mode only)")
+  parser.add_argument("--residual-filter-tau", type=float, default=None, help="Override residual torque filter tau in play (residual mode only)")
+  parser.add_argument("--residual-ramp-steps", type=int, default=None, help="Override residual ramp steps in play (residual mode only)")
   parser.add_argument("--viewer", type=str, default="auto", help="native | viser | auto")
   parser.add_argument("--fps", type=float, default=60.0, help="Viewer frame rate (ignored when --realtime is set)")
   parser.add_argument(
@@ -159,12 +170,41 @@ def main() -> None:
 
   from rsl_rl.runners import OnPolicyRunner
 
-  from irb2400_rl.task.env_cfg import Irb2400TrackingTaskParams, make_irb2400_tracking_env_cfg
+  from irb2400_rl.task.env_cfg import (
+    ACTION_TERM_NAME,
+    Irb2400TrackingTaskParams,
+    make_irb2400_tracking_env_cfg,
+  )
+  from run_record import load_run_metadata
 
   os.environ.setdefault("MUJOCO_GL", "glfw")
 
+  experiment_root = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking"
+  resolved_checkpoint = args.checkpoint or _find_latest_checkpoint(experiment_root)
+  if resolved_checkpoint is None:
+    print("[INFO] resolved checkpoint: <none> (running zero-action policy)")
+  else:
+    print(f"[INFO] resolved checkpoint: {resolved_checkpoint}")
+
+  run_dir = Path(resolved_checkpoint).parent if resolved_checkpoint is not None else None
+  action_mode = (args.action_mode or "auto").strip().lower()
+  action_mode_source = "arg"
+  if action_mode == "auto":
+    action_mode_source = "default"
+    action_mode = "gain_sched"
+    if run_dir is not None:
+      meta = load_run_metadata(run_dir)
+      if isinstance(meta, dict) and meta.get("action_mode"):
+        action_mode = str(meta["action_mode"]).strip().lower()
+        action_mode_source = "run_record.json"
+  if action_mode not in ("gain_sched", "residual"):
+    print(f"[WARN] unsupported action_mode='{action_mode}', falling back to gain_sched")
+    action_mode = "gain_sched"
+    action_mode_source = "fallback"
+  print(f"[INFO] action_mode={action_mode} (source={action_mode_source})")
+
   env_cfg = make_irb2400_tracking_env_cfg(
-    params=Irb2400TrackingTaskParams(num_envs=int(args.num_envs)),
+    params=Irb2400TrackingTaskParams(num_envs=int(args.num_envs), action_mode=action_mode),
     play=True,
   )
   # Optional: override command distribution (for stress-tests).
@@ -198,6 +238,18 @@ def main() -> None:
           float(args.cmd_j6_scale),
         )
 
+  # Optional: override residual safety knobs for play.
+  act_cfg = env_cfg.actions.get(ACTION_TERM_NAME)
+  if act_cfg is not None:
+    if args.residual_scale is not None and hasattr(act_cfg, "residual_scale"):
+      act_cfg.residual_scale = float(args.residual_scale)
+    if args.residual_clip is not None and hasattr(act_cfg, "residual_clip"):
+      act_cfg.residual_clip = float(args.residual_clip)
+    if args.residual_filter_tau is not None and hasattr(act_cfg, "residual_filter_tau"):
+      act_cfg.residual_filter_tau = float(args.residual_filter_tau)
+    if args.residual_ramp_steps is not None and hasattr(act_cfg, "residual_ramp_steps"):
+      act_cfg.residual_ramp_steps = int(args.residual_ramp_steps)
+
   env_cfg.viewer.env_idx = int(args.env_idx)
   cam = (args.camera or "").strip().lower()
   if cam == "world":
@@ -217,13 +269,6 @@ def main() -> None:
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   env = RslRlVecEnvWrapper(env, clip_actions=1.0)
-
-  experiment_root = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking"
-  resolved_checkpoint = args.checkpoint or _find_latest_checkpoint(experiment_root)
-  if resolved_checkpoint is None:
-    print("[INFO] resolved checkpoint: <none> (running zero-action policy)")
-  else:
-    print(f"[INFO] resolved checkpoint: {resolved_checkpoint}")
 
   if resolved_checkpoint is None:
     action_shape = env.unwrapped.action_space.shape  # type: ignore[attr-defined]

@@ -200,6 +200,17 @@ def update_latest_pointer(experiment_root: Path, log_dir: Path) -> None:
   (experiment_root / "_latest.txt").write_text(str(log_dir) + "\n", encoding="utf-8")
 
 
+def load_run_metadata(run_dir: Path) -> Optional[dict[str, Any]]:
+  """Load `run_record.json` from a run directory, if present."""
+  try:
+    p = run_dir / "run_record.json"
+    if not p.exists():
+      return None
+    return json.loads(p.read_text(encoding="utf-8"))
+  except Exception:
+    return None
+
+
 def record_eval(
   *,
   eval_log_dir: Path,

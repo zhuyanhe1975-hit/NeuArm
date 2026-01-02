@@ -29,16 +29,23 @@ def main() -> None:
   parser.add_argument("--effort-limit", type=float, default=300.0)
   parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
   parser.add_argument("--preset", type=str, default="", help="Optional preset: fine")
+  parser.add_argument(
+    "--action-mode",
+    type=str,
+    default="gain_sched",
+    choices=("gain_sched", "residual"),
+    help="Policy/controller mode: gain_sched (NN outputs Kp/Kd multipliers) or residual (NN outputs residual torques)",
+  )
   # Gain-scheduling authority (start small; ramp in slowly).
   parser.add_argument("--kp-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kp scheduling (action->multiplier)")
   parser.add_argument("--kd-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kd scheduling (action->multiplier)")
   parser.add_argument("--gain-ramp-steps", type=int, default=500000, help="Ramp-in steps for gain scheduling authority (0 disables)")
   parser.add_argument("--gain-filter-tau", type=float, default=0.03, help="Low-pass filter time constant for gain multipliers (0 disables)")
-  # Back-compat flags (ignored in gain-scheduling mode).
-  parser.add_argument("--residual-scale", type=float, default=0.0, help=argparse.SUPPRESS)
-  parser.add_argument("--residual-clip", type=float, default=0.0, help=argparse.SUPPRESS)
-  parser.add_argument("--residual-ramp-steps", type=int, default=0, help=argparse.SUPPRESS)
-  parser.add_argument("--residual-filter-tau", type=float, default=0.0, help=argparse.SUPPRESS)
+  # Residual torque authority (used when --action-mode residual; ignored otherwise).
+  parser.add_argument("--residual-scale", type=float, default=2.0, help="Residual torque scale (N*m) for action=1")
+  parser.add_argument("--residual-clip", type=float, default=5.0, help="Residual torque clip (N*m)")
+  parser.add_argument("--residual-ramp-steps", type=int, default=500000, help="Ramp-in steps for residual authority (0 disables)")
+  parser.add_argument("--residual-filter-tau", type=float, default=0.03, help="Low-pass filter time constant for residual torque (s, 0 disables)")
   parser.add_argument("--action-l2-weight", type=float, default=-1e-2)
   parser.add_argument("--action-rate-weight", type=float, default=-5e-3)
   parser.add_argument("--device", type=str, default=None, help="cpu | cuda:0 | auto")
@@ -96,22 +103,33 @@ def main() -> None:
   # Actions are clipped to [-1, 1] by the vec-env wrapper.
   clip_actions = 1.0
 
-  env_cfg = make_irb2400_tracking_env_cfg(
-    params=Irb2400TrackingTaskParams(
-      num_envs=args.num_envs,
-      decimation=args.decimation,
-      episode_length_s=args.episode_length_s,
-      effort_limit=args.effort_limit,
-    )
+  params = Irb2400TrackingTaskParams(
+    num_envs=args.num_envs,
+    decimation=args.decimation,
+    episode_length_s=args.episode_length_s,
+    effort_limit=args.effort_limit,
+    action_mode=str(args.action_mode),
   )
+  env_cfg = make_irb2400_tracking_env_cfg(params=params)
 
   act = env_cfg.actions[ACTION_TERM_NAME]
-  # Configure gain scheduling action term safely (do not disturb baseline at a=0).
-  if hasattr(act, "kp_delta_max"):
-    act.kp_delta_max = float(args.kp_delta_max)
-    act.kd_delta_max = float(args.kd_delta_max)
-    act.gain_ramp_steps = int(args.gain_ramp_steps)
-    act.gain_filter_tau = float(args.gain_filter_tau)
+  if str(args.action_mode).strip().lower() == "gain_sched":
+    # Configure gain scheduling action term safely (do not disturb baseline at a=0).
+    if hasattr(act, "kp_delta_max"):
+      act.kp_delta_max = float(args.kp_delta_max)
+      act.kd_delta_max = float(args.kd_delta_max)
+      act.gain_ramp_steps = int(args.gain_ramp_steps)
+      act.gain_filter_tau = float(args.gain_filter_tau)
+  else:
+    # Configure residual authority safely (ramp + filter).
+    if hasattr(act, "residual_scale"):
+      act.residual_scale = float(args.residual_scale)
+    if hasattr(act, "residual_clip"):
+      act.residual_clip = float(args.residual_clip)
+    if hasattr(act, "residual_ramp_steps"):
+      act.residual_ramp_steps = int(args.residual_ramp_steps)
+    if hasattr(act, "residual_filter_tau"):
+      act.residual_filter_tau = float(args.residual_filter_tau)
 
   # Configure reward weights (action regularization).
   env_cfg.rewards["action_l2"].weight = float(args.action_l2_weight)
@@ -161,7 +179,23 @@ def main() -> None:
 
   record = not args.no_record
   if record:
-    write_run_metadata(log_dir, argv=sys.argv, extra={"args": vars(args), "device": device})
+    # Persist key experiment settings so eval/play can reconstruct the correct env/action mode.
+    step_dt_s = float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)) * float(getattr(env_cfg, "decimation", 1))
+    write_run_metadata(
+      log_dir,
+      argv=sys.argv,
+      extra={
+        "args": vars(args),
+        "device": device,
+        "action_mode": str(args.action_mode),
+        "env_params": asdict(params),
+        "env": {
+          "sim_dt_s": float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)),
+          "decimation": int(getattr(env_cfg, "decimation", 1)),
+          "step_dt_s": step_dt_s,
+        },
+      },
+    )
     update_latest_pointer(log_root, log_dir)
     train_stdout_log = log_dir / "train_stdout.log"
     train_jsonl = log_dir / "train_metrics.jsonl"

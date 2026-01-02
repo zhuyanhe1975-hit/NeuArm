@@ -128,16 +128,28 @@ class ResidualComputedTorqueAction(ActionTerm):
 
     tau_ff = 0.0
     ff_mode = self.cfg.ff_mode.lower()
-    if ff_mode not in ("none", "gravcomp", "bias", "ctff"):
+    if ff_mode not in (
+      "none",
+      "gravcomp",
+      "gravcomp_passive",
+      "bias",
+      "bias_passive",
+      "ctff",
+      "ctff_passive",
+    ):
       raise ValueError(
-        f"Unsupported ff_mode='{self.cfg.ff_mode}', expected none|gravcomp|bias|ctff"
+        "Unsupported ff_mode="
+        f"'{self.cfg.ff_mode}', expected none|gravcomp|gravcomp_passive|"
+        "bias|bias_passive|ctff|ctff_passive"
       )
 
     if ff_mode != "none":
       nv = int(self._env.sim.mj_model.nv)
       dof = self._dof_ids
+      include_passive = ff_mode.endswith("_passive")
+      base_mode = ff_mode.replace("_passive", "")
 
-      if ff_mode == "gravcomp":
+      if base_mode == "gravcomp":
         # Gravity compensation only.
         qfrc = self._env.sim.data.qfrc_gravcomp[:, :nv].contiguous()
         tau_ff = qfrc.index_select(1, dof)
@@ -146,7 +158,7 @@ class ResidualComputedTorqueAction(ActionTerm):
         qfrc_bias = self._env.sim.data.qfrc_bias[:, :nv].contiguous()
         tau_ff = qfrc_bias.index_select(1, dof)
 
-        if ff_mode == "ctff":
+        if base_mode == "ctff":
           # Add inertia term M(q) * qdd_des (computed-torque feedforward).
           qM = self._env.sim.data.qM[:, :nv, :nv].contiguous()
           qM_sub = qM.index_select(1, dof).index_select(2, dof).contiguous()
@@ -158,6 +170,11 @@ class ResidualComputedTorqueAction(ActionTerm):
             ).view(1, -1)
             tau_mass = tau_mass * mask
           tau_ff = tau_ff + tau_mass
+
+      if include_passive:
+        # Add passive forces (joint damping + frictionloss) to cancel modeled friction.
+        qfrc_passive = self._env.sim.data.qfrc_passive[:, :nv].contiguous()
+        tau_ff = tau_ff + qfrc_passive.index_select(1, dof)
 
     residual_scale = float(self.cfg.residual_scale)
     if self.cfg.residual_ramp_steps and self.cfg.residual_ramp_steps > 0:
@@ -216,8 +233,11 @@ class ResidualComputedTorqueActionCfg(ActionTermCfg):
   # Feedforward mode:
   # - "none": no feedforward
   # - "gravcomp": gravity compensation only (qfrc_gravcomp)
+  # - "gravcomp_passive": gravcomp + passive (qfrc_passive)
   # - "bias": bias compensation only (qfrc_bias)
+  # - "bias_passive": bias + passive (qfrc_bias + qfrc_passive)
   # - "ctff": computed-torque feedforward (qfrc_bias + M(q) * qdd_des)
+  # - "ctff_passive": ctff + passive (qfrc_bias + qfrc_passive + M(q) * qdd_des)
   #
   # Optional: apply the inertia term only on a subset of joints by setting
   # ctff_joint_mask (length = action_dim). Joints with mask=False will
@@ -402,23 +422,35 @@ class GainScheduledComputedTorqueAction(ActionTerm):
 
     tau_ff = 0.0
     ff_mode = self.cfg.ff_mode.lower()
-    if ff_mode not in ("none", "gravcomp", "bias", "ctff"):
+    if ff_mode not in (
+      "none",
+      "gravcomp",
+      "gravcomp_passive",
+      "bias",
+      "bias_passive",
+      "ctff",
+      "ctff_passive",
+    ):
       raise ValueError(
-        f"Unsupported ff_mode='{self.cfg.ff_mode}', expected none|gravcomp|bias|ctff"
+        "Unsupported ff_mode="
+        f"'{self.cfg.ff_mode}', expected none|gravcomp|gravcomp_passive|"
+        "bias|bias_passive|ctff|ctff_passive"
       )
 
     if ff_mode != "none":
       nv = int(self._env.sim.mj_model.nv)
       dof = self._dof_ids
+      include_passive = ff_mode.endswith("_passive")
+      base_mode = ff_mode.replace("_passive", "")
 
-      if ff_mode == "gravcomp":
+      if base_mode == "gravcomp":
         qfrc = self._env.sim.data.qfrc_gravcomp[:, :nv].contiguous()
         tau_ff = qfrc.index_select(1, dof)
       else:
         qfrc_bias = self._env.sim.data.qfrc_bias[:, :nv].contiguous()
         tau_ff = qfrc_bias.index_select(1, dof)
 
-        if ff_mode == "ctff":
+        if base_mode == "ctff":
           qM = self._env.sim.data.qM[:, :nv, :nv].contiguous()
           qM_sub = qM.index_select(1, dof).index_select(2, dof).contiguous()
           qdd = qdd_des.contiguous()
@@ -429,6 +461,10 @@ class GainScheduledComputedTorqueAction(ActionTerm):
             ).view(1, -1)
             tau_mass = tau_mass * mask
           tau_ff = tau_ff + tau_mass
+
+      if include_passive:
+        qfrc_passive = self._env.sim.data.qfrc_passive[:, :nv].contiguous()
+        tau_ff = tau_ff + qfrc_passive.index_select(1, dof)
 
     tau = tau_ff + tau_pid
     tau = torch.clamp(tau, -self.cfg.effort_limit, self.cfg.effort_limit)

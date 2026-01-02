@@ -217,6 +217,13 @@ def main() -> None:
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
   parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
+  parser.add_argument(
+    "--action-mode",
+    type=str,
+    default="auto",
+    choices=("auto", "gain_sched", "residual"),
+    help="Env/controller mode to match the checkpoint. auto reads run_record.json next to the checkpoint.",
+  )
   # Command overrides (stress-test tracking distribution).
   parser.add_argument("--cmd-sine-freq-lo", type=float, default=None, help="Override sine freq lower bound (Hz)")
   parser.add_argument("--cmd-sine-freq-hi", type=float, default=None, help="Override sine freq upper bound (Hz)")
@@ -231,6 +238,10 @@ def main() -> None:
   parser.add_argument("--kp-delta-max", type=float, default=None, help="Override Kp scheduling authority in eval (+/- delta around 1)")
   parser.add_argument("--kd-delta-max", type=float, default=None, help="Override Kd scheduling authority in eval (+/- delta around 1)")
   parser.add_argument("--gain-filter-tau", type=float, default=None, help="Override gain multiplier LPF time constant in eval (s)")
+  parser.add_argument("--residual-scale", type=float, default=None, help="Override residual torque scale (N*m) in eval (residual mode only)")
+  parser.add_argument("--residual-clip", type=float, default=None, help="Override residual torque clip (N*m) in eval (residual mode only)")
+  parser.add_argument("--residual-filter-tau", type=float, default=None, help="Override residual torque filter tau (s) in eval (residual mode only)")
+  parser.add_argument("--residual-ramp-steps", type=int, default=None, help="Override residual ramp steps in eval (residual mode only)")
   parser.add_argument("--no-record", action="store_true", help="Disable writing eval_history.jsonl")
   args = parser.parse_args()
 
@@ -238,7 +249,7 @@ def main() -> None:
   sys.path.insert(0, str(repo_root / "src"))
 
   from irb2400_rl.mjlab_bootstrap import ensure_mjlab_on_path
-  from run_record import record_eval
+  from run_record import load_run_metadata, record_eval
 
   ensure_mjlab_on_path()
   os.environ.setdefault("MUJOCO_GL", "egl")
@@ -268,8 +279,34 @@ def main() -> None:
 
   experiment_root = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking"
 
+  policy = None
+  resolved_checkpoint = args.checkpoint
+  if resolved_checkpoint is None:
+    resolved_checkpoint = _find_latest_checkpoint(experiment_root)
+  if resolved_checkpoint is None:
+    print("[INFO] resolved checkpoint: <none> (running zero-action policy)")
+  else:
+    print(f"[INFO] resolved checkpoint: {resolved_checkpoint}")
+
+  run_dir = Path(resolved_checkpoint).parent if resolved_checkpoint is not None else None
+  action_mode = (args.action_mode or "auto").strip().lower()
+  action_mode_source = "arg"
+  if action_mode == "auto":
+    action_mode_source = "default"
+    action_mode = "gain_sched"
+    if run_dir is not None:
+      meta = load_run_metadata(run_dir)
+      if isinstance(meta, dict) and meta.get("action_mode"):
+        action_mode = str(meta["action_mode"]).strip().lower()
+        action_mode_source = "run_record.json"
+  if action_mode not in ("gain_sched", "residual"):
+    print(f"[WARN] unsupported action_mode='{action_mode}', falling back to gain_sched")
+    action_mode = "gain_sched"
+    action_mode_source = "fallback"
+  print(f"[INFO] action_mode={action_mode} (source={action_mode_source})")
+
   env_cfg = make_irb2400_tracking_env_cfg(
-    params=Irb2400TrackingTaskParams(num_envs=1),
+    params=Irb2400TrackingTaskParams(num_envs=1, action_mode=action_mode),
     play=True,
   )
   # Optional: override command distribution (for stress-tests).
@@ -303,21 +340,24 @@ def main() -> None:
           float(args.cmd_j6_scale),
         )
 
-  # Optional: override gain-scheduling settings for evaluation.
-  if args.kp_delta_max is not None or args.kd_delta_max is not None or args.gain_filter_tau is not None:
-    act_cfg = env_cfg.actions.get(ACTION_TERM_NAME)
-    if act_cfg is None:
-      raise RuntimeError(f"Expected action term '{ACTION_TERM_NAME}' in env_cfg.actions")
-    if args.kp_delta_max is not None and hasattr(act_cfg, "kp_delta_max"):
-      act_cfg.kp_delta_max = float(args.kp_delta_max)
-    if args.kd_delta_max is not None and hasattr(act_cfg, "kd_delta_max"):
-      act_cfg.kd_delta_max = float(args.kd_delta_max)
-    if args.gain_filter_tau is not None and hasattr(act_cfg, "gain_filter_tau"):
-      act_cfg.gain_filter_tau = float(args.gain_filter_tau)
-    print(
-      f"[INFO] eval gain override: kp_delta={getattr(act_cfg,'kp_delta_max',None)} "
-      f"kd_delta={getattr(act_cfg,'kd_delta_max',None)} tau={getattr(act_cfg,'gain_filter_tau',None)}"
-    )
+  # Optional: override action/controller settings for evaluation.
+  act_cfg = env_cfg.actions.get(ACTION_TERM_NAME)
+  if act_cfg is None:
+    raise RuntimeError(f"Expected action term '{ACTION_TERM_NAME}' in env_cfg.actions")
+  if args.kp_delta_max is not None and hasattr(act_cfg, "kp_delta_max"):
+    act_cfg.kp_delta_max = float(args.kp_delta_max)
+  if args.kd_delta_max is not None and hasattr(act_cfg, "kd_delta_max"):
+    act_cfg.kd_delta_max = float(args.kd_delta_max)
+  if args.gain_filter_tau is not None and hasattr(act_cfg, "gain_filter_tau"):
+    act_cfg.gain_filter_tau = float(args.gain_filter_tau)
+  if args.residual_scale is not None and hasattr(act_cfg, "residual_scale"):
+    act_cfg.residual_scale = float(args.residual_scale)
+  if args.residual_clip is not None and hasattr(act_cfg, "residual_clip"):
+    act_cfg.residual_clip = float(args.residual_clip)
+  if args.residual_filter_tau is not None and hasattr(act_cfg, "residual_filter_tau"):
+    act_cfg.residual_filter_tau = float(args.residual_filter_tau)
+  if args.residual_ramp_steps is not None and hasattr(act_cfg, "residual_ramp_steps"):
+    act_cfg.residual_ramp_steps = int(args.residual_ramp_steps)
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
@@ -326,15 +366,6 @@ def main() -> None:
 
   cmd_term = env.command_manager.get_term("traj")
   act_term = env.action_manager.get_term(ACTION_TERM_NAME)
-
-  policy = None
-  resolved_checkpoint = args.checkpoint
-  if resolved_checkpoint is None:
-    resolved_checkpoint = _find_latest_checkpoint(experiment_root)
-  if resolved_checkpoint is None:
-    print("[INFO] resolved checkpoint: <none> (running zero-action policy)")
-  else:
-    print(f"[INFO] resolved checkpoint: {resolved_checkpoint}")
   if resolved_checkpoint is not None:
     agent_cfg = RslRlOnPolicyRunnerCfg(
       policy=RslRlPpoActorCriticCfg(
@@ -526,6 +557,8 @@ def main() -> None:
       }
     cmd_cfg = env_cfg.commands.get("traj")
     extra = {"artifacts": artifacts} if artifacts else {}
+    extra["action_mode"] = str(action_mode)
+    extra["action_mode_source"] = str(action_mode_source)
     if cmd_cfg is not None:
       extra["command_override"] = {
         "trajectory_type": getattr(cmd_cfg, "trajectory_type", None),
