@@ -53,3 +53,23 @@ conda run -n mjwarp_env python scripts/eval_irb2400_tracking.py --device cuda:0 
 - 控制器参数：`src/irb2400_rl/task/env_cfg.py` 里 `ResidualComputedTorqueActionCfg(...)`
 - 前馈模式：`ff_mode="none" | "gravcomp" | "bias" | "ctff"`（建议先 `bias`，再开 residual/ctff）
 - 轨迹幅度/频率：`src/irb2400_rl/task/env_cfg.py` 里 `JointTrajectoryCommandCfg(...)`
+
+## 可视化（Native MuJoCo）
+
+用原生 MuJoCo 窗口播放策略，直观看轨迹跟踪效果（自动找最新 checkpoint）：
+
+```bash
+conda run -n mjwarp_env python scripts/play_irb2400_tracking.py --device cuda:0
+```
+
+指定 checkpoint：
+
+```bash
+conda run -n mjwarp_env python scripts/play_irb2400_tracking.py --device cuda:0 --checkpoint logs/rsl_rl/neuarm_irb2400_tracking/<run>/model_299.pt
+```
+
+按键（native viewer）：
+- `ENTER`：reset
+- `SPACE`：pause/resume
+- `-` / `=`：slow down / speed up
+- `,` / `.`：prev / next env（当 `--num-envs > 1`）
