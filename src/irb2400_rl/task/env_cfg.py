@@ -60,6 +60,9 @@ def make_irb2400_tracking_env_cfg(
       # Keep wrist-roll (j6) motion smaller to avoid large joint errors while
       # still tracking wrist-center position.
       joint_delta_scale_by_joint=(0.05, 0.05, 0.05, 0.05, 0.05, 0.005),
+      trajectory_type="sine",
+      sine_freq_hz_range=(0.2, 0.8),
+      sine_cycles_range=(2, 4),
       tcp_site_name=None,
       debug_vis=False,
     )

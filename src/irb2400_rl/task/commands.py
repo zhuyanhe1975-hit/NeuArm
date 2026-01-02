@@ -31,6 +31,11 @@ class JointTrajectoryCommand(CommandTerm):
     self._qd_des = torch.zeros_like(self._q0)
     self._qdd_des = torch.zeros_like(self._q0)
 
+    # Sine trajectory parameters (per env)
+    self._sine_amp = torch.zeros_like(self._q0)
+    self._sine_cycles = torch.ones(self.num_envs, 1, device=self.device)
+    self._sine_freq_hz = torch.ones(self.num_envs, 1, device=self.device)
+
     # TCP desired trajectory (for reward shaping only).
     self._has_tcp = cfg.tcp_site_name is not None
     if self._has_tcp:
@@ -148,6 +153,36 @@ class JointTrajectoryCommand(CommandTerm):
     q1 = torch.clamp(q + delta, lim[..., 0], lim[..., 1])
     self._q1[env_ids] = q1
 
+    if self.cfg.trajectory_type.lower() == "sine":
+      # Periodic sine around current q0 (phase=0).
+      # Use symmetric amplitude within joint limits.
+      q0 = q
+      # available symmetric margin to joint limits
+      margin = torch.minimum(q0 - lim[..., 0], lim[..., 1] - q0)
+      margin = torch.clamp(margin * 0.95, min=0.0)
+      # scale from joint range (and optional per-joint scale)
+      if self.cfg.joint_delta_scale_by_joint is None:
+        scale = float(self.cfg.joint_delta_scale)
+        amp = (lim[..., 1] - lim[..., 0]) * (scale * 0.5)
+      else:
+        scale = torch.tensor(
+          self.cfg.joint_delta_scale_by_joint, device=self.device, dtype=q0.dtype
+        ).view(1, -1)
+        amp = (lim[..., 1] - lim[..., 0]) * (scale * 0.5)
+      amp = torch.minimum(amp, margin)
+      self._sine_amp[env_ids] = amp
+      # sample a single base frequency per env to keep a common segment duration
+      f_lo, f_hi = self.cfg.sine_freq_hz_range
+      f = torch.empty(env_ids.shape[0], 1, device=self.device).uniform_(float(f_lo), float(f_hi))
+      c_lo, c_hi = self.cfg.sine_cycles_range
+      cycles = torch.randint(int(c_lo), int(c_hi) + 1, (env_ids.shape[0], 1), device=self.device)
+      self._sine_freq_hz[env_ids] = f
+      self._sine_cycles[env_ids] = cycles.to(dtype=f.dtype)
+      T = (cycles.to(dtype=f.dtype) / torch.clamp(f, min=1e-3)).squeeze(-1)
+      # Override the manager timer so resampling happens exactly at segment end.
+      self.time_left[env_ids] = T
+      self._segment_duration[env_ids] = T
+
     if self._has_tcp:
       # tcp0 from current sim state (GPU). tcp FK knots from MuJoCo CPU FK.
       self._tcp0[env_ids] = self.robot.data.site_pos_w[env_ids, self._tcp_site_local]
@@ -224,6 +259,13 @@ class JointTrajectoryCommandCfg(CommandTermCfg):
   joint_names_expr: tuple[str, ...] = (r".*joint_[1-6]$",)
   joint_delta_scale: float = 0.25
   joint_delta_scale_by_joint: tuple[float, ...] | None = None
+  # Trajectory generator type:
+  # - "quintic": random point-to-point quintic in joint space
+  # - "sine": periodic sine around current q (phase=0)
+  trajectory_type: str = "quintic"
+  # Sine settings (used when trajectory_type=="sine").
+  sine_freq_hz_range: tuple[float, float] = (0.2, 1.0)
+  sine_cycles_range: tuple[int, int] = (1, 3)
   max_joint_vel: float = 3.0
   max_joint_acc: float = 20.0
   # If set, compute a TCP desired trajectory (position-only) for reward shaping.
