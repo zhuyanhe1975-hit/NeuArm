@@ -5,6 +5,35 @@ import sys
 from pathlib import Path
 
 
+# Silence known Warp deprecation warnings emitted by warp 1.12+ when used
+# through mujoco_warp/mjlab. Set NEUARM_SHOW_WARP_DEPRECATIONS=1 to show them.
+def _silence_warp_deprecations() -> None:
+  """Silence Warp DeprecationWarning prints.
+
+  Warp overrides warnings.showwarning and forces simplefilter("default"), so
+  filtering via warnings.filterwarnings() is not reliable. We patch Warp
+  internal warn() to ignore DeprecationWarning messages instead.
+  """
+  if os.getenv("NEUARM_SHOW_WARP_DEPRECATIONS", "0") == "1":
+    return
+
+  try:
+    import warp._src.utils as _wutils
+
+    _orig_warn = _wutils.warn
+
+    def _warn_no_deprec(message, category=None, stacklevel=1, once=False):
+      if category is DeprecationWarning:
+        return
+      return _orig_warn(message, category, stacklevel=stacklevel, once=once)
+
+    _wutils.warn = _warn_no_deprec
+  except Exception:
+    # If Warp is unavailable, do nothing.
+    return
+
+
+
 def ensure_mjlab_on_path(mjlab_src: str | None = None) -> Path:
   """Ensure mjlab (source checkout) is importable without installation.
 
@@ -13,6 +42,7 @@ def ensure_mjlab_on_path(mjlab_src: str | None = None) -> Path:
   2) `MJLAB_SRC` environment variable
   3) default path `/home/yhzhu/AI/mjlab/src`
   """
+  _silence_warp_deprecations()
   mjlab_src = (
     mjlab_src
     or os.environ.get("MJLAB_SRC")
