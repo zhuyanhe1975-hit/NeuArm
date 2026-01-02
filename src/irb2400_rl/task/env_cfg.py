@@ -118,9 +118,10 @@ def make_irb2400_tracking_env_cfg(
       integral_limit=0.2,
       # Keep arm joints tight and gently boost only j6 (wrist roll).
       # j6: keep stiffness modest but add damping to avoid oscillation.
-      kp_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 2.0),
-      kd_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 6.0),
-      ff_mode="bias",
+      kp_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 4.0),
+      kd_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 12.0),
+      ff_mode="ctff",
+      ctff_joint_mask=(True, True, True, False, False, False),
     ),
   }
 

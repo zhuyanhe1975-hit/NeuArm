@@ -34,6 +34,12 @@ class ResidualComputedTorqueAction(ActionTerm):
     self._raw_actions = torch.zeros(self.num_envs, self._action_dim, device=self.device)
     self._i_err = torch.zeros_like(self._raw_actions)
 
+    if cfg.ctff_joint_mask is not None and len(cfg.ctff_joint_mask) != self._action_dim:
+      raise ValueError(
+        "ctff_joint_mask must match action_dim: "
+        f"{len(cfg.ctff_joint_mask)} != {self._action_dim}"
+      )
+
     if cfg.err_scale_by_joint is not None and len(cfg.err_scale_by_joint) != self._action_dim:
       raise ValueError(
         "err_scale_by_joint must match action_dim: "
@@ -129,6 +135,11 @@ class ResidualComputedTorqueAction(ActionTerm):
           qM_sub = qM.index_select(1, dof).index_select(2, dof).contiguous()
           qdd = qdd_des.contiguous()
           tau_mass = torch.sum(qM_sub * qdd.unsqueeze(1), dim=-1)
+          if self.cfg.ctff_joint_mask is not None:
+            mask = torch.tensor(
+              self.cfg.ctff_joint_mask, device=self.device, dtype=tau_mass.dtype
+            ).view(1, -1)
+            tau_mass = tau_mass * mask
           tau_ff = tau_ff + tau_mass
 
     tau_resid = self.cfg.residual_scale * self._raw_actions
@@ -170,7 +181,12 @@ class ResidualComputedTorqueActionCfg(ActionTermCfg):
   # - "gravcomp": gravity compensation only (qfrc_gravcomp)
   # - "bias": bias compensation only (qfrc_bias)
   # - "ctff": computed-torque feedforward (qfrc_bias + M(q) * qdd_des)
+  #
+  # Optional: apply the inertia term only on a subset of joints by setting
+  # ctff_joint_mask (length = action_dim). Joints with mask=False will
+  # receive only the bias term (plus PD/residual).
   ff_mode: str = "gravcomp"
+  ctff_joint_mask: tuple[bool, ...] | None = None
 
   def build(self, env: "ManagerBasedRlEnv") -> ResidualComputedTorqueAction:
     return ResidualComputedTorqueAction(self, env)
