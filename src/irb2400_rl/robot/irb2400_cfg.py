@@ -43,8 +43,7 @@ def get_irb2400_robot_cfg(
     target_names_expr=(r".*joint_[1-6]$",),
     effort_limit=actuator_limits.effort_limit,
     gear=actuator_limits.gear,
-    # Keep a small armature for numerical stability (especially wrist joints).
-    armature=0.05,
+    armature=0.0,
     frictionloss=0.0,
   )
 
