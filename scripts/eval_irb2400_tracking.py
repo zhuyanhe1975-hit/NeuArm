@@ -269,6 +269,10 @@ def main() -> None:
   resolved_checkpoint = args.checkpoint
   if resolved_checkpoint is None:
     resolved_checkpoint = _find_latest_checkpoint(experiment_root)
+  if resolved_checkpoint is None:
+    print("[INFO] resolved checkpoint: <none> (running zero-action policy)")
+  else:
+    print(f"[INFO] resolved checkpoint: {resolved_checkpoint}")
   if resolved_checkpoint is not None:
     agent_cfg = RslRlOnPolicyRunnerCfg(
       policy=RslRlPpoActorCriticCfg(
@@ -302,6 +306,7 @@ def main() -> None:
     try:
       runner.load(resolved_checkpoint, load_optimizer=False)
       policy = runner.get_inference_policy(device=device)
+      print(f"[INFO] loaded policy from checkpoint: {resolved_checkpoint}")
     except Exception as e:
       print(f"[WARN] failed to load checkpoint {resolved_checkpoint}: {e}")
       policy = None
