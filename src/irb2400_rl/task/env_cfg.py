@@ -60,7 +60,7 @@ def make_irb2400_tracking_env_cfg(
       # Keep wrist-roll (j6) motion smaller to avoid large joint errors while
       # still tracking wrist-center position.
       joint_delta_scale_by_joint=(0.05, 0.05, 0.05, 0.05, 0.05, 0.005),
-      tcp_site_name="tcp",
+      tcp_site_name=None,
       debug_vis=False,
     )
   }
@@ -142,15 +142,9 @@ def make_irb2400_tracking_env_cfg(
   rewards = {
     "track_q": RewardTermCfg(
       func=mdp.track_joint_pos_exp,
-      weight=1.0,
+      weight=2.0,
       # Too-small std makes rewards ~0 for modest errors => weak learning signal.
       params={"command_name": "traj", "std": 0.25},
-    ),
-    # Primary objective: TCP position tracking (5mm initial std).
-    "track_tcp": RewardTermCfg(
-      func=mdp.track_tcp_pos_exp,
-      weight=2.0,
-      params={"command_name": "traj", "std": 0.005},
     ),
     "track_qd": RewardTermCfg(
       func=mdp.track_joint_vel_exp,
