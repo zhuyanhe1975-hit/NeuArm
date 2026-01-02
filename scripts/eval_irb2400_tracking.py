@@ -41,12 +41,89 @@ def _find_latest_checkpoint(experiment_root: Path) -> str | None:
   return str(best_path) if best_path is not None else None
 
 
+
+
+def _safe_stem(path_str: str | None) -> str:
+  if not path_str:
+    return "no_ckpt"
+  p = Path(path_str)
+  return p.stem.replace(".", "_")
+
+
+def _save_eval_plots(
+  *,
+  out_dir: Path,
+  dt_s: float,
+  joint_err_rad: "np.ndarray",
+  action: "np.ndarray" | None,
+  dpi: int,
+  title_prefix: str,
+) -> dict[str, str]:
+  """Save diagnostic plots (joint error, optionally action) and return artifact paths."""
+  try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+  except Exception as e:
+    print(f"[WARN] matplotlib not available; skipping plots: {e}")
+    return {}
+
+  out_dir.mkdir(parents=True, exist_ok=True)
+
+  T = int(joint_err_rad.shape[0])
+  t = (np.arange(T, dtype=np.float32) * float(dt_s))
+
+  # Joint error figure.
+  fig, axes = plt.subplots(3, 2, figsize=(12, 8), sharex=True)
+  axes = axes.reshape(-1)
+  for i, ax in enumerate(axes[: joint_err_rad.shape[1]]):
+    ax.plot(t, joint_err_rad[:, i], linewidth=1.0)
+    ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.5)
+    ax.set_title(f"j{i+1} error (rad)")
+    ax.grid(True, alpha=0.3)
+  for ax in axes:
+    ax.set_xlabel("time (s)")
+  fig.suptitle(f"{title_prefix} joint tracking error")
+  fig.tight_layout(rect=(0, 0, 1, 0.96))
+
+  joint_png = out_dir / "joint_error.png"
+  fig.savefig(joint_png, dpi=int(dpi))
+  plt.close(fig)
+
+  artifacts: dict[str, str] = {"joint_error_png": str(joint_png)}
+
+  # Action and action-rate figure (optional but useful for spotting jitter).
+  if action is not None and action.size > 0:
+    da = np.diff(action, axis=0, prepend=action[:1])
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    axes[0].plot(t, action, linewidth=0.8)
+    axes[0].set_title("policy action (residual) per joint")
+    axes[0].grid(True, alpha=0.3)
+    axes[1].plot(t, da / max(float(dt_s), 1e-6), linewidth=0.8)
+    axes[1].set_title("action rate (approx, per joint)")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_xlabel("time (s)")
+    fig.suptitle(f"{title_prefix} policy action")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+
+    action_png = out_dir / "action.png"
+    fig.savefig(action_png, dpi=int(dpi))
+    plt.close(fig)
+    artifacts["action_png"] = str(action_png)
+
+  return artifacts
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt")
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
   parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
+  parser.add_argument("--plots", action="store_true", help="Save eval time-series plots to _eval/plots")
+  parser.add_argument("--no-plots", dest="plots", action="store_false", help="Disable saving plots")
+  parser.set_defaults(plots=True)
+  parser.add_argument("--plot-dpi", type=int, default=160)
   parser.add_argument("--no-record", action="store_true", help="Disable writing eval_history.jsonl")
   args = parser.parse_args()
 
@@ -89,6 +166,8 @@ def main() -> None:
   )
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
+
+  dt_s = float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)) * float(getattr(env_cfg, "decimation", 1))
 
   policy = None
   resolved_checkpoint = args.checkpoint
@@ -157,6 +236,7 @@ def main() -> None:
   ee_errs_mm = []
   joint_rmse_rad = []
   joint_abs_err = []
+  actions = []
   with torch.no_grad():
     for _ in range(args.steps):
       if policy is None:
@@ -170,6 +250,8 @@ def main() -> None:
           action = policy(obs)
 
       obs, _, _, _, _ = env.step(action)
+
+      actions.append(action.squeeze(0).detach().cpu().numpy())
 
       cmd = env.command_manager.get_command("traj")
       q_des = cmd[:, 0:num_joints]
@@ -192,6 +274,13 @@ def main() -> None:
       ee_errs_mm.append(float(err_mm.item()))
 
   env.close()
+
+  artifacts: dict[str, str] = {}
+  if args.plots:
+    plot_dir = (repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval" / "plots" / f"{_safe_stem(resolved_checkpoint)}_{args.site}_{args.steps}")
+    joint_err_np = np.asarray(joint_abs_err, dtype=np.float32)
+    action_np = np.asarray(actions, dtype=np.float32) if len(actions) else None
+    artifacts = _save_eval_plots(out_dir=plot_dir, dt_s=dt_s, joint_err_rad=joint_err_np, action=action_np, dpi=args.plot_dpi, title_prefix=_safe_stem(resolved_checkpoint))
 
   ee_errs_mm_np = np.asarray(ee_errs_mm, dtype=np.float32)
   joint_rmse_rad_np = np.asarray(joint_rmse_rad, dtype=np.float32)
@@ -226,6 +315,7 @@ def main() -> None:
       checkpoint=resolved_checkpoint,
       site=args.site,
       metrics=metrics,
+      extra={"artifacts": artifacts} if artifacts else None,
     )
 
 
