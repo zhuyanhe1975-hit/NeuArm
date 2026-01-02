@@ -2,6 +2,17 @@ from __future__ import annotations
 
 import os
 import sys
+import warnings
+
+# Silence a known PyTorch 2.8+ warning triggered inside rsl_rl (harmless).
+# Set NEUARM_SHOW_PYTORCH_WARNINGS=1 to show it.
+if os.getenv("NEUARM_SHOW_PYTORCH_WARNINGS", "0") != "1":
+  warnings.filterwarnings(
+    "ignore",
+    message=r"Using a non-tuple sequence for multidimensional indexing is deprecated.*",
+    category=UserWarning,
+  )
+
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path

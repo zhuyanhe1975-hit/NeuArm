@@ -3,6 +3,17 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import warnings
+
+# Silence a known PyTorch 2.8+ warning triggered inside rsl_rl (harmless).
+# Set NEUARM_SHOW_PYTORCH_WARNINGS=1 to show it.
+if os.getenv("NEUARM_SHOW_PYTORCH_WARNINGS", "0") != "1":
+  warnings.filterwarnings(
+    "ignore",
+    message=r"Using a non-tuple sequence for multidimensional indexing is deprecated.*",
+    category=UserWarning,
+  )
+
 from dataclasses import asdict
 from pathlib import Path
 
@@ -116,7 +127,6 @@ def main() -> None:
     try:
       runner.load(resolved_checkpoint, load_optimizer=False)
       policy = runner.get_inference_policy(device=device)
-      print(f"[INFO] using checkpoint: {resolved_checkpoint}")
     except Exception as e:
       print(f"[WARN] failed to load checkpoint {resolved_checkpoint}: {e}")
       policy = None
