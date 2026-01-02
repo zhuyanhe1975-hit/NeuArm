@@ -13,12 +13,14 @@ def main() -> None:
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
   parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
+  parser.add_argument("--no-record", action="store_true", help="Disable writing eval_history.jsonl")
   args = parser.parse_args()
 
   repo_root = Path(__file__).resolve().parents[1]
   sys.path.insert(0, str(repo_root / "src"))
 
   from irb2400_rl.mjlab_bootstrap import ensure_mjlab_on_path
+  from run_record import record_eval
 
   ensure_mjlab_on_path()
   os.environ.setdefault("MUJOCO_GL", "egl")
@@ -128,6 +130,29 @@ def main() -> None:
     wrist_rmse = float(np.sqrt(np.mean(joint_abs_err_np[:, 3:6] ** 2))) if num_joints >= 6 else float("nan")
     print(f"Arm(1-3) RMSE (rad): {arm_rmse:.4f}  Wrist(4-6) RMSE (rad): {wrist_rmse:.4f}")
   print(f"TCP error (mm): mean={ee_errs_mm_np.mean():.3f}  p95={np.percentile(ee_errs_mm_np,95):.3f}  max={ee_errs_mm_np.max():.3f}")
+
+  if not args.no_record:
+    metrics = {
+      "joint_rmse_rad": {
+        "mean": float(joint_rmse_rad_np.mean()),
+        "p95": float(np.percentile(joint_rmse_rad_np, 95)),
+        "max": float(joint_rmse_rad_np.max()),
+      },
+      "per_joint_rmse_rad": {f"j{i+1}": float(per_joint_rmse[i]) for i in range(num_joints)},
+      "tcp_err_mm": {
+        "mean": float(ee_errs_mm_np.mean()),
+        "p95": float(np.percentile(ee_errs_mm_np, 95)),
+        "max": float(ee_errs_mm_np.max()),
+      },
+      "steps": int(args.steps),
+      "device": str(device),
+    }
+    record_eval(
+      eval_log_dir=repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval",
+      checkpoint=args.checkpoint,
+      site=args.site,
+      metrics=metrics,
+    )
 
 
 if __name__ == "__main__":

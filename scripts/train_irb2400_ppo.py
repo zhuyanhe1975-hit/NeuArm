@@ -28,12 +28,15 @@ def main() -> None:
   parser.add_argument("--num-steps-per-env", type=int, default=32)
   parser.add_argument("--save-interval", type=int, default=50)
   parser.add_argument("--run-name", type=str, default="")
+  parser.add_argument("--no-record", action="store_true", help="Disable simple JSONL/stdout run recording")
   args = parser.parse_args()
 
   repo_root = Path(__file__).resolve().parents[1]
   sys.path.insert(0, str(repo_root / "src"))
 
   from irb2400_rl.mjlab_bootstrap import ensure_mjlab_on_path
+
+  from run_record import RslRlStdoutParser, tee_stdout_to_file, update_latest_pointer, write_run_metadata
 
   ensure_mjlab_on_path()
 
@@ -122,13 +125,47 @@ def main() -> None:
   log_dir = log_root / log_dir_name
   log_dir.mkdir(parents=True, exist_ok=True)
 
+  record = not args.no_record
+  if record:
+    write_run_metadata(log_dir, argv=sys.argv, extra={"args": vars(args), "device": device})
+    update_latest_pointer(log_root, log_dir)
+    train_stdout_log = log_dir / "train_stdout.log"
+    train_jsonl = log_dir / "train_metrics.jsonl"
+    parser_rec = RslRlStdoutParser(train_jsonl)
+  else:
+    train_stdout_log = None
+    parser_rec = None
+
   print(f"[INFO] device={device} num_envs={args.num_envs} log_dir={log_dir}")
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   env = RslRlVecEnvWrapper(env, clip_actions=clip_actions)
 
   runner = OnPolicyRunner(env, asdict(agent_cfg), str(log_dir), device=device)
-  runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+  if record:
+    with tee_stdout_to_file(train_stdout_log):
+      class _LineTap:
+        def __init__(self, wrapped_stream, parser):
+          self._wrapped = wrapped_stream
+          self._parser = parser
+          self._buf = ""
+        def write(self, s: str) -> int:
+          self._buf += s
+          while "\n" in self._buf:
+            line, self._buf = self._buf.split("\n", 1)
+            self._parser.process_line(line + "\n")
+          return self._wrapped.write(s)
+        def flush(self) -> None:
+          return self._wrapped.flush()
+      old_out = sys.stdout
+      sys.stdout = _LineTap(sys.stdout, parser_rec)
+      try:
+        runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+      finally:
+        sys.stdout = old_out
+        parser_rec.close()
+  else:
+    runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
   env.close()
 
 
