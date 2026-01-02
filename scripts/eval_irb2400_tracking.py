@@ -194,6 +194,9 @@ def main() -> None:
   parser.add_argument("--no-plots", dest="plots", action="store_false", help="Disable saving plots")
   parser.set_defaults(plots=True)
   parser.add_argument("--plot-dpi", type=int, default=160)
+  parser.add_argument("--residual-scale", type=float, default=None, help="Override residual torque scale in eval (N*m per action unit)")
+  parser.add_argument("--residual-clip", type=float, default=None, help="Override residual torque clip in eval (N*m)")
+  parser.add_argument("--residual-filter-tau", type=float, default=None, help="Override residual torque LPF time constant in eval (s)")
   parser.add_argument("--no-record", action="store_true", help="Disable writing eval_history.jsonl")
   args = parser.parse_args()
 
@@ -234,6 +237,26 @@ def main() -> None:
     params=Irb2400TrackingTaskParams(num_envs=1),
     play=True,
   )
+  # Optional: override residual torque settings for evaluation.
+  # By default, play-mode env disables residual (residual_scale=0) to keep baseline stable.
+  if args.residual_scale is not None or args.residual_clip is not None or args.residual_filter_tau is not None:
+    act_cfg = env_cfg.actions.get("residual_tau")
+    if act_cfg is None:
+      raise RuntimeError("Expected action term 'residual_tau' in env_cfg.actions")
+    if args.residual_scale is not None:
+      act_cfg.residual_scale = float(args.residual_scale)
+    if args.residual_clip is not None:
+      act_cfg.residual_clip = float(args.residual_clip)
+    elif args.residual_scale is not None and getattr(act_cfg, "residual_clip", None) in (0.0, 0, None):
+      # If residual enabled but clip wasn't set, use a conservative default.
+      act_cfg.residual_clip = 5.0
+    if args.residual_filter_tau is not None:
+      act_cfg.residual_filter_tau = float(args.residual_filter_tau)
+    print(
+      f"[INFO] eval residual override: scale={getattr(act_cfg,'residual_scale',None)} "
+      f"clip={getattr(act_cfg,'residual_clip',None)} tau={getattr(act_cfg,'residual_filter_tau',None)}"
+    )
+
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
 
@@ -314,6 +337,7 @@ def main() -> None:
   raw_actions = []
   tau_resid_applied = []
   tau_cmd = []
+  tau_resid_abs = []
   with torch.no_grad():
     for _ in range(args.steps):
       if policy is None:
@@ -332,6 +356,7 @@ def main() -> None:
       phases.append(float(cmd_term.phase[0].item()))
       try:
         tau_resid_applied.append(act_term.tau_resid_applied.squeeze(0).detach().cpu().numpy())
+        tau_resid_abs.append(float(act_term.tau_resid_applied.abs().max().item()))
         tau_cmd.append(act_term.tau_cmd.squeeze(0).detach().cpu().numpy())
       except Exception:
         pass
@@ -394,6 +419,9 @@ def main() -> None:
     wrist_rmse = float(np.sqrt(np.mean(joint_abs_err_np[:, 3:6] ** 2))) if num_joints >= 6 else float("nan")
     print(f"Arm(1-3) RMSE (rad): {arm_rmse:.4f}  Wrist(4-6) RMSE (rad): {wrist_rmse:.4f}")
   print(f"TCP error (mm): mean={ee_errs_mm_np.mean():.3f}  p95={np.percentile(ee_errs_mm_np,95):.3f}  max={ee_errs_mm_np.max():.3f}")
+  if len(tau_resid_abs):
+    tau_abs_np = np.asarray(tau_resid_abs, dtype=np.float32)
+    print(f"Residual |tau| (N*m): mean={tau_abs_np.mean():.4f}  p95={np.percentile(tau_abs_np,95):.4f}  max={tau_abs_np.max():.4f}")
 
   if not args.no_record:
     metrics = {
@@ -411,6 +439,13 @@ def main() -> None:
       "steps": int(args.steps),
       "device": str(device),
     }
+    if len(tau_resid_abs):
+      tau_abs_np = np.asarray(tau_resid_abs, dtype=np.float32)
+      metrics["residual_tau_abs_nm"] = {
+        "mean": float(tau_abs_np.mean()),
+        "p95": float(np.percentile(tau_abs_np, 95)),
+        "max": float(tau_abs_np.max()),
+      }
     record_eval(
       eval_log_dir=repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval",
       checkpoint=resolved_checkpoint,
