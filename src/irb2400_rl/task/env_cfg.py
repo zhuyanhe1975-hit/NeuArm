@@ -122,7 +122,7 @@ def make_irb2400_tracking_env_cfg(
       kp_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 4.0),
       kd_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 12.0),
       ff_mode="ctff",
-      ctff_joint_mask=(True, True, True, False, False, False),
+      ctff_joint_mask=(True, True, True, True, True, False),
     ),
   }
 

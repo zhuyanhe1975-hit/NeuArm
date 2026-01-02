@@ -55,11 +55,20 @@ def _save_eval_plots(
   out_dir: Path,
   dt_s: float,
   joint_err_rad: "np.ndarray",
-  action: "np.ndarray" | None,
+  joint_vel_err: "np.ndarray" | None,
+  phase: "np.ndarray" | None,
+  raw_action: "np.ndarray" | None,
+  tau_resid: "np.ndarray" | None,
+  tau_cmd: "np.ndarray" | None,
   dpi: int,
   title_prefix: str,
 ) -> dict[str, str]:
-  """Save diagnostic plots (joint error, optionally action) and return artifact paths."""
+  """Save diagnostic plots and return artifact paths.
+
+  Plots are designed to help spot:
+  - segment boundary effects (phase resets)
+  - high-frequency jitter (qd error, action-rate, torque ripple)
+  """
   try:
     import matplotlib
 
@@ -73,35 +82,96 @@ def _save_eval_plots(
   out_dir.mkdir(parents=True, exist_ok=True)
 
   T = int(joint_err_rad.shape[0])
-  t = (np.arange(T, dtype=np.float32) * float(dt_s))
+  t = np.arange(T, dtype=np.float32) * float(dt_s)
 
-  # Joint error figure.
+  def segment_times() -> list[float]:
+    if phase is None or len(phase) != T:
+      return []
+    pts: list[float] = []
+    for i in range(1, T):
+      if phase[i] + 0.25 < phase[i - 1]:
+        pts.append(float(t[i]))
+    return pts
+
+  seg_t = segment_times()
+
+  def add_seg_lines(ax) -> None:
+    for x in seg_t:
+      ax.axvline(x, color="k", linewidth=0.6, alpha=0.2)
+
+  artifacts: dict[str, str] = {}
+
+  # Joint position error figure.
   fig, axes = plt.subplots(3, 2, figsize=(12, 8), sharex=True)
   axes = axes.reshape(-1)
   for i, ax in enumerate(axes[: joint_err_rad.shape[1]]):
     ax.plot(t, joint_err_rad[:, i], linewidth=1.0)
-    ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.5)
-    ax.set_title(f"j{i+1} error (rad)")
+    ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.4)
+    add_seg_lines(ax)
+    ax.set_title(f"j{i+1} q_err (rad)")
     ax.grid(True, alpha=0.3)
   for ax in axes:
     ax.set_xlabel("time (s)")
-  fig.suptitle(f"{title_prefix} joint tracking error")
+  fig.suptitle(f"{title_prefix} joint position tracking error")
   fig.tight_layout(rect=(0, 0, 1, 0.96))
-
   joint_png = out_dir / "joint_error.png"
   fig.savefig(joint_png, dpi=int(dpi))
   plt.close(fig)
+  artifacts["joint_error_png"] = str(joint_png)
 
-  artifacts: dict[str, str] = {"joint_error_png": str(joint_png)}
+  # Joint velocity error figure.
+  if joint_vel_err is not None and joint_vel_err.size:
+    fig, axes = plt.subplots(3, 2, figsize=(12, 8), sharex=True)
+    axes = axes.reshape(-1)
+    for i, ax in enumerate(axes[: joint_vel_err.shape[1]]):
+      ax.plot(t, joint_vel_err[:, i], linewidth=1.0)
+      ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.4)
+      add_seg_lines(ax)
+      ax.set_title(f"j{i+1} qd_err (rad/s)")
+      ax.grid(True, alpha=0.3)
+    for ax in axes:
+      ax.set_xlabel("time (s)")
+    fig.suptitle(f"{title_prefix} joint velocity tracking error")
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    qd_png = out_dir / "joint_vel_error.png"
+    fig.savefig(qd_png, dpi=int(dpi))
+    plt.close(fig)
+    artifacts["joint_vel_error_png"] = str(qd_png)
 
-  # Action and action-rate figure (optional but useful for spotting jitter).
-  if action is not None and action.size > 0:
-    da = np.diff(action, axis=0, prepend=action[:1])
+  # Residual/torque figure (post-filter), if available.
+  if tau_resid is not None and tau_resid.size:
     fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
-    axes[0].plot(t, action, linewidth=0.8)
-    axes[0].set_title("policy action (residual) per joint")
+    axes[0].plot(t, tau_resid, linewidth=0.8)
+    add_seg_lines(axes[0])
+    axes[0].set_title("applied residual torque (N*m) per joint")
+    axes[0].grid(True, alpha=0.3)
+
+    if tau_cmd is not None and tau_cmd.size:
+      axes[1].plot(t, tau_cmd, linewidth=0.8)
+      axes[1].set_title("total commanded torque (N*m) per joint")
+    else:
+      axes[1].axis('off')
+    add_seg_lines(axes[1])
+    axes[1].grid(True, alpha=0.3)
+    axes[1].set_xlabel("time (s)")
+
+    fig.suptitle(f"{title_prefix} torque diagnostics")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    torque_png = out_dir / "torque.png"
+    fig.savefig(torque_png, dpi=int(dpi))
+    plt.close(fig)
+    artifacts["torque_png"] = str(torque_png)
+
+  # Raw action and action-rate (useful for spotting policy-induced jitter).
+  if raw_action is not None and raw_action.size:
+    da = np.diff(raw_action, axis=0, prepend=raw_action[:1])
+    fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+    axes[0].plot(t, raw_action, linewidth=0.8)
+    add_seg_lines(axes[0])
+    axes[0].set_title("policy output (raw action) per joint")
     axes[0].grid(True, alpha=0.3)
     axes[1].plot(t, da / max(float(dt_s), 1e-6), linewidth=0.8)
+    add_seg_lines(axes[1])
     axes[1].set_title("action rate (approx, per joint)")
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xlabel("time (s)")
@@ -168,6 +238,9 @@ def main() -> None:
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
 
   dt_s = float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)) * float(getattr(env_cfg, "decimation", 1))
+
+  cmd_term = env.command_manager.get_term("traj")
+  act_term = env.action_manager.get_term("residual_tau")
 
   policy = None
   resolved_checkpoint = args.checkpoint
@@ -236,7 +309,11 @@ def main() -> None:
   ee_errs_mm = []
   joint_rmse_rad = []
   joint_abs_err = []
-  actions = []
+  joint_vel_err = []
+  phases = []
+  raw_actions = []
+  tau_resid_applied = []
+  tau_cmd = []
   with torch.no_grad():
     for _ in range(args.steps):
       if policy is None:
@@ -251,13 +328,22 @@ def main() -> None:
 
       obs, _, _, _, _ = env.step(action)
 
-      actions.append(action.squeeze(0).detach().cpu().numpy())
+      raw_actions.append(action.squeeze(0).detach().cpu().numpy())
+      phases.append(float(cmd_term.phase[0].item()))
+      try:
+        tau_resid_applied.append(act_term.tau_resid_applied.squeeze(0).detach().cpu().numpy())
+        tau_cmd.append(act_term.tau_cmd.squeeze(0).detach().cpu().numpy())
+      except Exception:
+        pass
 
       cmd = env.command_manager.get_command("traj")
       q_des = cmd[:, 0:num_joints]
+      qd_des = cmd[:, num_joints : 2 * num_joints]
       q = robot.data.joint_pos[:, 0:num_joints]
+      qd = robot.data.joint_vel[:, 0:num_joints]
       joint_rmse_rad.append(float(torch.sqrt(torch.mean((q_des - q) ** 2)).item()))
       joint_abs_err.append((q_des - q).abs().squeeze(0).detach().cpu().numpy())
+      joint_vel_err.append((qd_des - qd).squeeze(0).detach().cpu().numpy())
 
       # Current EE pos.
       ee_pos = robot.data.site_pos_w[:, ee_site_local]
@@ -279,8 +365,23 @@ def main() -> None:
   if args.plots:
     plot_dir = (repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval" / "plots" / f"{_safe_stem(resolved_checkpoint)}_{args.site}_{args.steps}")
     joint_err_np = np.asarray(joint_abs_err, dtype=np.float32)
-    action_np = np.asarray(actions, dtype=np.float32) if len(actions) else None
-    artifacts = _save_eval_plots(out_dir=plot_dir, dt_s=dt_s, joint_err_rad=joint_err_np, action=action_np, dpi=args.plot_dpi, title_prefix=_safe_stem(resolved_checkpoint))
+    joint_vel_err_np = np.asarray(joint_vel_err, dtype=np.float32) if len(joint_vel_err) else None
+    phase_np = np.asarray(phases, dtype=np.float32) if len(phases) else None
+    raw_action_np = np.asarray(raw_actions, dtype=np.float32) if len(raw_actions) else None
+    tau_resid_np = np.asarray(tau_resid_applied, dtype=np.float32) if len(tau_resid_applied) else None
+    tau_cmd_np = np.asarray(tau_cmd, dtype=np.float32) if len(tau_cmd) else None
+    artifacts = _save_eval_plots(
+      out_dir=plot_dir,
+      dt_s=dt_s,
+      joint_err_rad=joint_err_np,
+      joint_vel_err=joint_vel_err_np,
+      phase=phase_np,
+      raw_action=raw_action_np,
+      tau_resid=tau_resid_np,
+      tau_cmd=tau_cmd_np,
+      dpi=args.plot_dpi,
+      title_prefix=_safe_stem(resolved_checkpoint),
+    )
 
   ee_errs_mm_np = np.asarray(ee_errs_mm, dtype=np.float32)
   joint_rmse_rad_np = np.asarray(joint_rmse_rad, dtype=np.float32)

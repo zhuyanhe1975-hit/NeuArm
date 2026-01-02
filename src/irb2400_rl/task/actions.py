@@ -35,6 +35,8 @@ class ResidualComputedTorqueAction(ActionTerm):
     self._raw_actions = torch.zeros(self.num_envs, self._action_dim, device=self.device)
     self._i_err = torch.zeros_like(self._raw_actions)
     self._tau_resid_filt = torch.zeros_like(self._raw_actions)
+    self._tau_resid_applied = torch.zeros_like(self._raw_actions)
+    self._tau_cmd = torch.zeros_like(self._raw_actions)
 
     if cfg.ctff_joint_mask is not None and len(cfg.ctff_joint_mask) != self._action_dim:
       raise ValueError(
@@ -60,10 +62,22 @@ class ResidualComputedTorqueAction(ActionTerm):
   def raw_action(self) -> torch.Tensor:
     return self._raw_actions
 
+  @property
+  def tau_resid_applied(self) -> torch.Tensor:
+    """Residual torque actually applied (post scale/clip/filter), in N*m."""
+    return self._tau_resid_applied
+
+  @property
+  def tau_cmd(self) -> torch.Tensor:
+    """Total joint torque command applied (post clamp), in N*m."""
+    return self._tau_cmd
+
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     self._raw_actions[env_ids] = 0.0
     self._i_err[env_ids] = 0.0
     self._tau_resid_filt[env_ids] = 0.0
+    self._tau_resid_applied[env_ids] = 0.0
+    self._tau_cmd[env_ids] = 0.0
 
   def process_actions(self, actions: torch.Tensor) -> None:
     self._raw_actions[:] = actions
@@ -160,8 +174,12 @@ class ResidualComputedTorqueAction(ActionTerm):
       self._tau_resid_filt.mul_(a).add_(tau_resid, alpha=(1.0 - a))
       tau_resid = self._tau_resid_filt
 
+    self._tau_resid_applied[:] = tau_resid
+
     tau = tau_ff + tau_pid + tau_resid
     tau = torch.clamp(tau, -self.cfg.effort_limit, self.cfg.effort_limit)
+
+    self._tau_cmd[:] = tau
 
     self.robot.set_joint_effort_target(tau, joint_ids=self._joint_ids)
 
