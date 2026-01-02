@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import sys
 import warnings
@@ -64,6 +65,13 @@ def _save_eval_plots(
   title_prefix: str,
 ) -> dict[str, str]:
   """Save diagnostic plots and return artifact paths.
+
+def _ckpt_id(path_str: str | None) -> str:
+  if not path_str:
+    return "none"
+  h = hashlib.sha1(path_str.encode("utf-8"), usedforsecurity=False).hexdigest()
+  return h[:8]
+
 
   Plots are designed to help spot:
   - segment boundary effects (phase resets)
@@ -393,7 +401,18 @@ def main() -> None:
 
   artifacts: dict[str, str] = {}
   if args.plots:
-    plot_dir = (repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval" / "plots" / f"{_safe_stem(resolved_checkpoint)}_{args.site}_{args.steps}")
+    res_tag = "off" if args.residual_scale is None else f"{args.residual_scale:g}"
+    clip_tag = "na" if args.residual_clip is None else f"{args.residual_clip:g}"
+    tau_tag = "na" if args.residual_filter_tau is None else f"{args.residual_filter_tau:g}"
+    plot_dir = (
+      repo_root
+      / "logs"
+      / "rsl_rl"
+      / "neuarm_irb2400_tracking"
+      / "_eval"
+      / "plots"
+      / f"{_safe_stem(resolved_checkpoint)}_{_ckpt_id(resolved_checkpoint)}_{args.site}_{args.steps}_res{res_tag}_clip{clip_tag}_tau{tau_tag}"
+    )
     joint_err_np = np.asarray(joint_abs_err, dtype=np.float32)
     joint_vel_err_np = np.asarray(joint_vel_err, dtype=np.float32) if len(joint_vel_err) else None
     phase_np = np.asarray(phases, dtype=np.float32) if len(phases) else None
