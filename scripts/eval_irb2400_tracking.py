@@ -7,6 +7,29 @@ from dataclasses import asdict
 from pathlib import Path
 
 
+import re
+
+
+def _find_latest_checkpoint(experiment_root: Path) -> str | None:
+  latest_ptr = experiment_root / "_latest.txt"
+  if not latest_ptr.exists():
+    return None
+  run_dir = Path(latest_ptr.read_text(encoding="utf-8").strip())
+  if not run_dir.exists():
+    return None
+  best_it = -1
+  best_path: Path | None = None
+  for p in run_dir.glob("model_*.pt"):
+    m = re.match(r"model_(\d+)\.pt$", p.name)
+    if not m:
+      continue
+    it = int(m.group(1))
+    if it > best_it:
+      best_it = it
+      best_path = p
+  return str(best_path) if best_path is not None else None
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt")
@@ -30,7 +53,12 @@ def main() -> None:
   from rsl_rl.runners import OnPolicyRunner
 
   from mjlab.envs import ManagerBasedRlEnv
-  from mjlab.rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+  from mjlab.rl import (
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoActorCriticCfg,
+    RslRlPpoAlgorithmCfg,
+    RslRlVecEnvWrapper,
+  )
 
   from irb2400_rl.task.env_cfg import (
     Irb2400TrackingTaskParams,
@@ -42,6 +70,8 @@ def main() -> None:
   else:
     device = args.device
 
+  experiment_root = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking"
+
   env_cfg = make_irb2400_tracking_env_cfg(
     params=Irb2400TrackingTaskParams(num_envs=1),
     play=True,
@@ -50,16 +80,46 @@ def main() -> None:
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
 
   policy = None
-  if args.checkpoint is not None:
+  resolved_checkpoint = args.checkpoint
+  if resolved_checkpoint is None:
+    resolved_checkpoint = _find_latest_checkpoint(experiment_root)
+  if resolved_checkpoint is not None:
     agent_cfg = RslRlOnPolicyRunnerCfg(
+      policy=RslRlPpoActorCriticCfg(
+        init_noise_std=0.2,
+        actor_obs_normalization=False,
+        critic_obs_normalization=False,
+        actor_hidden_dims=(256, 256, 128),
+        critic_hidden_dims=(256, 256, 128),
+        activation="elu",
+      ),
+      algorithm=RslRlPpoAlgorithmCfg(
+        learning_rate=3.0e-4,
+        num_learning_epochs=5,
+        num_mini_batches=4,
+        entropy_coef=0.005,
+        gamma=0.99,
+        lam=0.95,
+        desired_kl=0.01,
+        max_grad_norm=1.0,
+        value_loss_coef=1.0,
+        use_clipped_value_loss=True,
+        clip_param=0.2,
+        schedule="adaptive",
+      ),
       experiment_name="neuarm_irb2400_tracking",
       logger="tensorboard",
     )
     eval_log_dir = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval"
     eval_log_dir.mkdir(parents=True, exist_ok=True)
     runner = OnPolicyRunner(vec_env, asdict(agent_cfg), str(eval_log_dir), device=device)
-    runner.load(args.checkpoint, load_optimizer=False)
-    policy = runner.get_inference_policy(device=device)
+    try:
+      runner.load(resolved_checkpoint, load_optimizer=False)
+      policy = runner.get_inference_policy(device=device)
+      print(f"[INFO] using checkpoint: {resolved_checkpoint}")
+    except Exception as e:
+      print(f"[WARN] failed to load checkpoint {resolved_checkpoint}: {e}")
+      policy = None
 
   robot = env.scene["robot"]
   site_pat = rf".*{args.site}$"
@@ -93,7 +153,11 @@ def main() -> None:
         action = torch.zeros(env.num_envs, env.action_manager.total_action_dim, device=env.device)
       else:
         # rsl_rl policy expects policy obs only.
-        action = policy(obs["policy"])
+        try:
+          action = policy(obs["policy"])
+        except Exception:
+          # Some rsl_rl builds expect the full observation dict.
+          action = policy(obs)
 
       obs, _, _, _, _ = env.step(action)
 
@@ -149,7 +213,7 @@ def main() -> None:
     }
     record_eval(
       eval_log_dir=repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking" / "_eval",
-      checkpoint=args.checkpoint,
+      checkpoint=resolved_checkpoint,
       site=args.site,
       metrics=metrics,
     )
