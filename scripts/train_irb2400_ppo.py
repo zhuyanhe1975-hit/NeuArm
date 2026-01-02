@@ -29,6 +29,8 @@ def main() -> None:
   parser.add_argument("--effort-limit", type=float, default=300.0)
   parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
   parser.add_argument("--track-qd-std", type=float, default=1.5, help="Std (rad/s) for track_qd reward shaping")
+  parser.add_argument("--ki", type=float, default=None, help="Integral gain (per joint). If unset, uses controller default.")
+  parser.add_argument("--integral-limit", type=float, default=None, help="Integral windup limit (rad*s). If unset, uses controller default.")
   parser.add_argument("--preset", type=str, default="", help="Optional preset: fine")
   # Command distribution overrides (stress-test training).
   parser.add_argument("--cmd-sine-freq-lo", type=float, default=None, help="Override sine freq lower bound (Hz)")
@@ -169,6 +171,12 @@ def main() -> None:
       act.residual_ramp_steps = int(args.residual_ramp_steps)
     if hasattr(act, "residual_filter_tau"):
       act.residual_filter_tau = float(args.residual_filter_tau)
+
+  # Optional: integral action (useful against static friction).
+  if args.ki is not None and hasattr(act, "ki"):
+    act.ki = float(args.ki)
+  if args.integral_limit is not None and hasattr(act, "integral_limit"):
+    act.integral_limit = float(args.integral_limit)
 
   # Configure reward weights (action regularization).
   env_cfg.rewards["action_l2"].weight = float(args.action_l2_weight)
