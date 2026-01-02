@@ -39,6 +39,7 @@
                 <joint name="joint_6" axis="1 0 0" range="-6.9813 6.9813"/>
                 <geom rgba="0.188235 0.196078 0.203922 1" mesh="link_6"/>
                 <site name="ee" pos="0 0 0" size="0.02"/>
+                <site name="tcp" pos="0.2 0 0" size="0.01"/>
               </body>
             </body>
           </body>

@@ -11,6 +11,7 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt")
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
+  parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
   args = parser.parse_args()
 
@@ -59,9 +60,13 @@ def main() -> None:
     policy = runner.get_inference_policy(device=device)
 
   robot = env.scene["robot"]
-  site_ids, site_names = robot.find_sites((r".*ee$",), preserve_order=True)
+  site_pat = rf".*{args.site}$"
+  site_ids, site_names = robot.find_sites((site_pat,), preserve_order=True)
   if len(site_ids) != 1:
-    raise RuntimeError(f"Expected exactly 1 ee site, got {site_names}")
+    # Backward-compatible fallback.
+    site_ids, site_names = robot.find_sites((r".*ee$",), preserve_order=True)
+    if len(site_ids) != 1:
+      raise RuntimeError(f"Expected exactly 1 site for {args.site} (or ee fallback), got {site_names}")
   ee_site_local = site_ids[0]
   ee_site_global = int(robot.data.indexing.site_ids[ee_site_local].item())
 
@@ -122,7 +127,7 @@ def main() -> None:
     arm_rmse = float(np.sqrt(np.mean(joint_abs_err_np[:, :3] ** 2)))
     wrist_rmse = float(np.sqrt(np.mean(joint_abs_err_np[:, 3:6] ** 2))) if num_joints >= 6 else float("nan")
     print(f"Arm(1-3) RMSE (rad): {arm_rmse:.4f}  Wrist(4-6) RMSE (rad): {wrist_rmse:.4f}")
-  print(f"EE error (mm): mean={ee_errs_mm_np.mean():.3f}  p95={np.percentile(ee_errs_mm_np,95):.3f}  max={ee_errs_mm_np.max():.3f}")
+  print(f"TCP error (mm): mean={ee_errs_mm_np.mean():.3f}  p95={np.percentile(ee_errs_mm_np,95):.3f}  max={ee_errs_mm_np.max():.3f}")
 
 
 if __name__ == "__main__":
