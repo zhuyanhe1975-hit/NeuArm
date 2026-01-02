@@ -28,6 +28,7 @@ def main() -> None:
   parser.add_argument("--episode-length-s", type=float, default=6.0)
   parser.add_argument("--effort-limit", type=float, default=300.0)
   parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
+  parser.add_argument("--preset", type=str, default="", help="Optional preset: fine")
   # Gain-scheduling authority (start small; ramp in slowly).
   parser.add_argument("--kp-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kp scheduling (action->multiplier)")
   parser.add_argument("--kd-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kd scheduling (action->multiplier)")
@@ -45,6 +46,10 @@ def main() -> None:
   parser.add_argument("--num-steps-per-env", type=int, default=32)
   parser.add_argument("--save-interval", type=int, default=50)
   parser.add_argument("--run-name", type=str, default="")
+  parser.add_argument("--resume", type=str, default="", help="Resume training from a checkpoint path (model_*.pt)")
+  parser.add_argument("--resume-latest", action="store_true", help="Resume from the latest checkpoint under logs/rsl_rl/neuarm_irb2400_tracking")
+  parser.add_argument("--resume-no-optimizer", action="store_true", help="When resuming, do not load optimizer state")
+  parser.add_argument("--init-noise-std", type=float, default=0.2, help="Initial policy action noise std")
   parser.add_argument("--no-record", action="store_true", help="Disable simple JSONL/stdout run recording")
   args = parser.parse_args()
 
@@ -75,6 +80,13 @@ def main() -> None:
     Irb2400TrackingTaskParams,
     make_irb2400_tracking_env_cfg,
   )
+
+  preset = (args.preset or "").strip().lower()
+  if preset == "fine":
+    args.track_q_std = 0.05
+    args.init_noise_std = min(float(args.init_noise_std), 0.10)
+    args.action_rate_weight = -2e-3
+    args.num_steps_per_env = max(int(args.num_steps_per_env), 64)
 
   if args.device in (None, "auto"):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -111,7 +123,7 @@ def main() -> None:
 
   agent_cfg = RslRlOnPolicyRunnerCfg(
     policy=RslRlPpoActorCriticCfg(
-      init_noise_std=0.2,
+      init_noise_std=float(args.init_noise_std),
       actor_obs_normalization=False,
       critic_obs_normalization=False,
       actor_hidden_dims=(256, 256, 128),
@@ -164,6 +176,34 @@ def main() -> None:
   env = RslRlVecEnvWrapper(env, clip_actions=clip_actions)
 
   runner = OnPolicyRunner(env, asdict(agent_cfg), str(log_dir), device=device)
+
+  resume_ckpt = (args.resume or "").strip()
+  if args.resume_latest:
+    latest_ptr = log_root / "_latest.txt"
+    if latest_ptr.exists():
+      latest_run = Path(latest_ptr.read_text(encoding="utf-8").strip())
+      if latest_run.exists():
+        best_it = -1
+        best_path: Path | None = None
+        for p in latest_run.glob("model_*.pt"):
+          try:
+            it = int(p.stem.split("_", 1)[1])
+          except Exception:
+            continue
+          if it > best_it:
+            best_it = it
+            best_path = p
+        if best_path is not None:
+          resume_ckpt = str(best_path)
+  if resume_ckpt:
+    map_location = "cpu" if str(device).startswith("cpu") else None
+    runner.load(
+      resume_ckpt,
+      load_optimizer=(not args.resume_no_optimizer),
+      map_location=map_location,
+    )
+    print(f"[INFO] resumed from checkpoint: {resume_ckpt}")
+
   if record:
     with tee_stdout_to_file(train_stdout_log):
       class _LineTap:
