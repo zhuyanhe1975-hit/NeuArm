@@ -1,0 +1,52 @@
+{
+  "ts_utc": "2026-01-02T14:11:25Z",
+  "name": "residual_friction_model999",
+  "notes": [
+    "Sealed milestone: residual torque policy achieved low joint RMSE with friction enabled.",
+    "Checkpoint files live under logs/ (gitignored); this milestone records the resolved checkpoint path + eval artifacts."
+  ],
+  "checkpoint": {
+    "path": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_22-02-51/model_999.pt",
+    "run_dir": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_22-02-51",
+    "model_iter": 999
+  },
+  "eval": {
+    "site": "tcp",
+    "steps": 2000,
+    "metrics": {
+      "joint_rmse_rad": {
+        "mean": 0.002162789925932884,
+        "p95": 0.0036872706841677427,
+        "max": 0.0037961211055517197
+      },
+      "per_joint_rmse_rad": {
+        "j1": 0.0027867835015058517,
+        "j2": 0.0027561469469219446,
+        "j3": 0.0028780519496649504,
+        "j4": 0.0023136320523917675,
+        "j5": 0.001747778500430286,
+        "j6": 0.001653759041801095
+      },
+      "tcp_err_mm": {
+        "mean": 6.244649887084961,
+        "p95": 10.416781425476074,
+        "max": 10.86290454864502
+      },
+      "residual_tau_abs_nm": {
+        "mean": 8.331014633178711,
+        "p95": 8.568732261657715,
+        "max": 8.885138511657715
+      }
+    },
+    "artifacts": {
+      "joint_error_png": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_999_a95c1830_tcp_2000_kpna_kdna_tauna/joint_error.png",
+      "joint_vel_error_png": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_999_a95c1830_tcp_2000_kpna_kdna_tauna/joint_vel_error.png",
+      "torque_png": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_999_a95c1830_tcp_2000_kpna_kdna_tauna/torque.png",
+      "action_png": "/home/yhzhu/Industrial Robot/NeuArm_mjlab/logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_999_a95c1830_tcp_2000_kpna_kdna_tauna/action.png"
+    }
+  },
+  "git": {
+    "code_commit": "48b545bee04a2394a858113b35e07fff96d00c9f"
+  }
+}
+
