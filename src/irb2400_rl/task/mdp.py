@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, cast
 import torch
 
 from mjlab.managers.scene_entity_config import SceneEntityCfg
+from irb2400_rl.task.physics import set_joint_friction_and_damping
 
 if TYPE_CHECKING:
   from mjlab.entity import Entity
@@ -80,6 +81,10 @@ def action_rate_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
   return torch.sum(da * da, dim=-1)
 
 
+# Export plant parameter helper into mdp namespace for env_cfg wiring.
+set_joint_friction_and_damping = set_joint_friction_and_damping
+
+
 def tcp_pos_error(
   env: "ManagerBasedRlEnv",
   command_name: str,
@@ -115,4 +120,3 @@ def joint_pos_outside_soft_limits(
   below = q < (lim[..., 0] - margin)
   above = q > (lim[..., 1] + margin)
   return torch.any(below | above, dim=-1)
-

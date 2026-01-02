@@ -37,6 +37,10 @@ class Irb2400TrackingTaskParams:
   effort_limit: float = 1000.0
   traj_segment_time_range: tuple[float, float] = (0.6, 1.8)
   traj_joint_delta_scale: float = 0.05
+  # Plant friction model (per joint dof, N*m*s/rad and N*m).
+  # These are deterministic "object model" parameters, not domain randomization.
+  dof_damping: tuple[float, ...] = (2.0, 2.0, 1.5, 0.4, 0.3, 0.2)
+  dof_frictionloss: tuple[float, ...] = (8.0, 8.0, 6.0, 1.5, 1.0, 0.5)
 
 
 def make_irb2400_tracking_env_cfg(
@@ -135,6 +139,16 @@ def make_irb2400_tracking_env_cfg(
   }
 
   events = {
+    # Set plant friction parameters once at startup (applies to all envs).
+    "set_joint_friction": EventTermCfg(
+      func=mdp.set_joint_friction_and_damping,
+      mode="startup",
+      params={
+        "asset_cfg": SceneEntityCfg("robot", joint_names=(r".*joint_[1-6]$",)),
+        "dof_damping": params.dof_damping,
+        "dof_frictionloss": params.dof_frictionloss,
+      },
+    ),
     "reset_scene_to_default": EventTermCfg(func=reset_scene_to_default, mode="reset"),
     "reset_robot_joints": EventTermCfg(
       func=reset_joints_by_offset,
@@ -190,6 +204,11 @@ def make_irb2400_tracking_env_cfg(
     decimation=params.decimation,
     episode_length_s=episode_length_s,
     sim=SimulationCfg(
+      # With joint frictionloss/damping enabled, constraint counts can exceed
+      # MJWarp's heuristic defaults; allocate explicit headroom to avoid
+      # "nefc overflow" warnings.
+      njmax=256,
+      nconmax=256,
       mujoco=MujocoCfg(timestep=0.001, integrator="implicitfast", iterations=50),
     ),
     viewer=ViewerConfig(
