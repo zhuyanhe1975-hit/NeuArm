@@ -80,6 +80,30 @@ def action_rate_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
   return torch.sum(da * da, dim=-1)
 
 
+def tcp_pos_error(
+  env: "ManagerBasedRlEnv",
+  command_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ROBOT_CFG,
+) -> torch.Tensor:
+  term = env.command_manager.get_term(command_name)
+  tcp_des = getattr(term, "tcp_pos_des", None)
+  tcp_site_local = getattr(term, "tcp_site_local", None)
+  if tcp_des is None or tcp_site_local is None:
+    raise AttributeError(
+      f"Command term '{command_name}' does not expose tcp_pos_des/tcp_site_local; "
+      "set JointTrajectoryCommandCfg.tcp_site_name='tcp'"
+    )
+  robot = _robot(env, asset_cfg)
+  tcp_pos = robot.data.site_pos_w[:, int(tcp_site_local)]
+  return tcp_des - tcp_pos
+
+
+def track_tcp_pos_exp(env: "ManagerBasedRlEnv", command_name: str, std: float) -> torch.Tensor:
+  err = tcp_pos_error(env, command_name)
+  se = torch.sum(err * err, dim=-1)
+  return torch.exp(-se / (std * std))
+
+
 def joint_pos_outside_soft_limits(
   env: "ManagerBasedRlEnv",
   asset_cfg: SceneEntityCfg = _DEFAULT_ROBOT_CFG,

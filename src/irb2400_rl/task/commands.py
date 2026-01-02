@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+import mujoco
+import numpy as np
 import torch
 
 from mjlab.managers import CommandTerm, CommandTermCfg
@@ -29,6 +31,52 @@ class JointTrajectoryCommand(CommandTerm):
     self._qd_des = torch.zeros_like(self._q0)
     self._qdd_des = torch.zeros_like(self._q0)
 
+    # TCP desired trajectory (for reward shaping only).
+    self._has_tcp = cfg.tcp_site_name is not None
+    if self._has_tcp:
+      site_pat = rf".*{cfg.tcp_site_name}$"
+      site_ids, site_names = self.robot.find_sites((site_pat,), preserve_order=True)
+      if len(site_ids) != 1:
+        raise ValueError(
+          f"Expected exactly 1 tcp site matching '{site_pat}', got: {site_names}"
+        )
+      self._tcp_site_local = int(site_ids[0])
+      self._tcp_site_global = int(
+        self.robot.data.indexing.site_ids[self._tcp_site_local].item()
+      )
+
+      self._tcp0 = torch.zeros(self.num_envs, 3, device=self.device)
+      self._tcp_des = torch.zeros_like(self._tcp0)
+      self._tcpd_des = torch.zeros_like(self._tcp0)
+      self._tcpa_des = torch.zeros_like(self._tcp0)
+
+      # Precompute a coarse FK table for the commanded joint trajectory:
+      #   tcp_des(t) ~= FK(q_des(t)).
+      # This keeps the TCP reward consistent with the joint-space command
+      # (i.e., perfect joint tracking => ~0 TCP error), without doing per-step FK.
+      if len(cfg.tcp_fk_knots_t) < 2:
+        raise ValueError("tcp_fk_knots_t must have >= 2 knots")
+      if cfg.tcp_fk_knots_t[0] != 0.0 or cfg.tcp_fk_knots_t[-1] != 1.0:
+        raise ValueError("tcp_fk_knots_t must start at 0.0 and end at 1.0")
+      if any(b <= a for a, b in zip(cfg.tcp_fk_knots_t, cfg.tcp_fk_knots_t[1:])):
+        raise ValueError("tcp_fk_knots_t must be strictly increasing")
+
+      self._tcp_fk_knots_t = torch.tensor(
+        cfg.tcp_fk_knots_t, device=self.device, dtype=torch.float32
+      )
+      self._tcp_fk_knots_t_np = np.asarray(cfg.tcp_fk_knots_t, dtype=np.float64)
+      self._tcp_fk_knots_pos = torch.zeros(
+        self.num_envs, len(cfg.tcp_fk_knots_t), 3, device=self.device
+      )
+
+      # Reuse a MuJoCo CPU forward pass to compute tcp FK at knot configurations.
+      self._mj_model = env.sim.mj_model
+      self._mj_data_fk = mujoco.MjData(self._mj_model)
+      joint_q_adr = self.robot.data.indexing.joint_q_adr[self.joint_ids].to(
+        dtype=torch.long
+      )
+      self._qpos_adr_np = joint_q_adr.cpu().numpy()
+
     self.metrics["joint_pos_rmse"] = torch.zeros(self.num_envs, device=self.device)
 
   @property
@@ -40,12 +88,38 @@ class JointTrajectoryCommand(CommandTerm):
     denom = torch.clamp(self._segment_duration, min=1e-6)
     return 1.0 - torch.clamp(self.time_left / denom, 0.0, 1.0)
 
+  @property
+  def has_tcp(self) -> bool:
+    return self._has_tcp
+
+  @property
+  def tcp_site_local(self) -> int:
+    if not self._has_tcp:
+      raise AttributeError("TCP is disabled (tcp_site_name=None)")
+    return self._tcp_site_local
+
+  @property
+  def tcp_pos_des(self) -> torch.Tensor:
+    if not self._has_tcp:
+      raise AttributeError("TCP is disabled (tcp_site_name=None)")
+    return self._tcp_des
+
+  @property
+  def tcp_vel_des(self) -> torch.Tensor:
+    if not self._has_tcp:
+      raise AttributeError("TCP is disabled (tcp_site_name=None)")
+    return self._tcpd_des
+
+  @property
+  def tcp_acc_des(self) -> torch.Tensor:
+    if not self._has_tcp:
+      raise AttributeError("TCP is disabled (tcp_site_name=None)")
+    return self._tcpa_des
+
   def _update_metrics(self) -> None:
     q = self.robot.data.joint_pos[:, self.joint_ids]
     err = self._q_des - q
-    self.metrics["joint_pos_rmse"] = torch.sqrt(
-      torch.mean(err * err, dim=-1) + 1e-8
-    )
+    self.metrics["joint_pos_rmse"] = torch.sqrt(torch.mean(err * err, dim=-1) + 1e-8)
 
   def _resample_command(self, env_ids: torch.Tensor) -> None:
     if env_ids.numel() == 0:
@@ -74,6 +148,30 @@ class JointTrajectoryCommand(CommandTerm):
     q1 = torch.clamp(q + delta, lim[..., 0], lim[..., 1])
     self._q1[env_ids] = q1
 
+    if self._has_tcp:
+      # tcp0 from current sim state (GPU). tcp FK knots from MuJoCo CPU FK.
+      self._tcp0[env_ids] = self.robot.data.site_pos_w[env_ids, self._tcp_site_local]
+
+      q0_cpu = q.detach().cpu().numpy()
+      dq_cpu = (q1 - q).detach().cpu().numpy()
+      env_ids_cpu = env_ids.detach().cpu().numpy()
+      K = len(self._tcp_fk_knots_t_np)
+      tcp_knots_cpu = np.zeros((env_ids_cpu.shape[0], K, 3), dtype=np.float64)
+
+      for i in range(env_ids_cpu.shape[0]):
+        for k, tk in enumerate(self._tcp_fk_knots_t_np):
+          sk = 10.0 * tk**3 - 15.0 * tk**4 + 6.0 * tk**5
+          qk = q0_cpu[i] + sk * dq_cpu[i]
+          self._mj_data_fk.qpos[:] = 0.0
+          self._mj_data_fk.qvel[:] = 0.0
+          self._mj_data_fk.qpos[self._qpos_adr_np] = qk
+          mujoco.mj_forward(self._mj_model, self._mj_data_fk)
+          tcp_knots_cpu[i, k] = self._mj_data_fk.site_xpos[self._tcp_site_global].copy()
+
+      self._tcp_fk_knots_pos[env_ids] = torch.as_tensor(
+        tcp_knots_cpu, device=self.device, dtype=self._tcp_fk_knots_pos.dtype
+      )
+
   def _update_command(self) -> None:
     # Quintic time scaling: s(t) = 10 t^3 - 15 t^4 + 6 t^5, t in [0, 1]
     T = torch.clamp(self._segment_duration, min=1e-6).unsqueeze(-1)
@@ -95,6 +193,31 @@ class JointTrajectoryCommand(CommandTerm):
     self._qd_des = qd_des
     self._qdd_des = qdd_des
 
+    if self._has_tcp:
+      # Piecewise linear interpolation of FK waypoints in normalized time t.
+      tk = self._tcp_fk_knots_t  # (K,)
+      t0 = torch.clamp(t.squeeze(-1), 0.0, 1.0)  # (B,)
+      # Segment index i s.t. tk[i] <= t < tk[i+1]
+      idx = torch.bucketize(t0, tk[1:], right=False)
+      idx = torch.clamp(idx, 0, tk.numel() - 2)  # (B,)
+
+      idx_g = idx.view(-1, 1, 1).expand(-1, 1, 3)
+      idx_hi_g = (idx + 1).view(-1, 1, 1).expand(-1, 1, 3)
+      p_lo = self._tcp_fk_knots_pos.gather(1, idx_g).squeeze(1)
+      p_hi = self._tcp_fk_knots_pos.gather(1, idx_hi_g).squeeze(1)
+
+      t_lo = tk[idx]
+      t_hi = tk[idx + 1]
+      denom = torch.clamp(t_hi - t_lo, min=1e-6)
+      alpha = ((t0 - t_lo) / denom).unsqueeze(-1)
+
+      self._tcp_des = p_lo + alpha * (p_hi - p_lo)
+      # Approximate derivative under piecewise-linear interpolation.
+      T_scalar = torch.clamp(self._segment_duration, min=1e-6).unsqueeze(-1)
+      self._tcpd_des = (p_hi - p_lo) / (denom.unsqueeze(-1) * T_scalar)
+      self._tcpa_des.zero_()
+
+
 @dataclass(kw_only=True)
 class JointTrajectoryCommandCfg(CommandTermCfg):
   entity_name: str = "robot"
@@ -103,6 +226,11 @@ class JointTrajectoryCommandCfg(CommandTermCfg):
   joint_delta_scale_by_joint: tuple[float, ...] | None = None
   max_joint_vel: float = 3.0
   max_joint_acc: float = 20.0
+  # If set, compute a TCP desired trajectory (position-only) for reward shaping.
+  tcp_site_name: str | None = "tcp"
+  # Normalized time knots (t in [0,1]) used to precompute FK(tcp) along the
+  # commanded joint trajectory; reduces TCP reward saturation at mm scales.
+  tcp_fk_knots_t: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0)
   debug_vis: bool = False
 
   def build(self, env: "ManagerBasedRlEnv") -> JointTrajectoryCommand:
