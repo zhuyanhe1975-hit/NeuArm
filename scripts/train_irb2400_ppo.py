@@ -27,6 +27,7 @@ def main() -> None:
   parser.add_argument("--decimation", type=int, default=5)
   parser.add_argument("--episode-length-s", type=float, default=6.0)
   parser.add_argument("--effort-limit", type=float, default=300.0)
+  parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
   # Residual torque safety knobs (start small; ramp in slowly).
   parser.add_argument("--residual-scale", type=float, default=2.0)
   parser.add_argument("--residual-clip", type=float, default=5.0)
@@ -97,6 +98,9 @@ def main() -> None:
   env_cfg.rewards["action_l2"].weight = float(args.action_l2_weight)
   if "action_rate_l2" in env_cfg.rewards:
     env_cfg.rewards["action_rate_l2"].weight = float(args.action_rate_weight)
+
+  # Configure tracking reward scale.
+  env_cfg.rewards["track_q"].params["std"] = float(args.track_q_std)
 
   agent_cfg = RslRlOnPolicyRunnerCfg(
     policy=RslRlPpoActorCriticCfg(
