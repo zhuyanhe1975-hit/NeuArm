@@ -236,97 +236,101 @@ def main() -> None:
     print(f"[INFO] realtime=on render_fps={fps:.1f}Hz sim_hz={sim_hz:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
   else:
     print(f"[INFO] realtime=off fps={fps:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
-  print("[INFO] native viewer keys: ENTER=reset SPACE=pause/resume -=slower +=faster ,/.=prev/next env (when num_envs>1)")
 
   num_steps = None if int(args.steps) <= 0 else int(args.steps)
-  if viewer_backend == "native":
-    if args.show_other_envs:
-      import mujoco
+  try:
+    if viewer_backend == "native":
+      print("[INFO] native viewer keys: ENTER=reset SPACE=pause/resume -=slower +=faster ,/.=prev/next env (when num_envs>1)")
+      if args.show_other_envs:
+        import mujoco
 
-      class _GridEnvNativeViewer(NativeMujocoViewer):
-        def __init__(self, *a, **kw):
-          super().__init__(*a, **kw)
-          spacing = float(getattr(self.env.unwrapped.scene, "env_spacing", 2.0))
-          self._env_origins = _compute_env_origins_grid(self.env.unwrapped.num_envs, spacing)
+        class _GridEnvNativeViewer(NativeMujocoViewer):
+          def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            spacing = float(getattr(self.env.unwrapped.scene, "env_spacing", 2.0))
+            self._env_origins = _compute_env_origins_grid(self.env.unwrapped.num_envs, spacing)
 
-        def sync_env_to_viewer(self) -> None:
-          v = self.viewer
-          assert v is not None
-          assert self.mjm is not None and self.mjd is not None and self.vopt is not None
+          def sync_env_to_viewer(self) -> None:
+            v = self.viewer
+            assert v is not None
+            assert self.mjm is not None and self.mjd is not None and self.vopt is not None
 
-          with self._mj_lock:
-            sim_data = self.env.unwrapped.sim.data
+            with self._mj_lock:
+              sim_data = self.env.unwrapped.sim.data
 
-            # Primary env (selected) into mjd.
-            self.mjd.qpos[:] = sim_data.qpos[self.env_idx].cpu().numpy()
-            self.mjd.qvel[:] = sim_data.qvel[self.env_idx].cpu().numpy()
-            if self.mjm.nmocap > 0:
-              self.mjd.mocap_pos[:] = sim_data.mocap_pos[self.env_idx].cpu().numpy()
-              self.mjd.mocap_quat[:] = sim_data.mocap_quat[self.env_idx].cpu().numpy()
-            mujoco.mj_forward(self.mjm, self.mjd)
-
-            v.user_scn.ngeom = 0
-            if self._show_debug_vis and hasattr(self.env.unwrapped, "update_visualizers"):
-              from mjlab.viewer.native.visualizer import MujocoNativeDebugVisualizer
-
-              visualizer = MujocoNativeDebugVisualizer(v.user_scn, self.mjm, self.env_idx)
-              self.env.unwrapped.update_visualizers(visualizer)
-
-            # Render other envs (offset into a grid so they don't overlap).
-            if self.vd is None:
-              self.vd = mujoco.MjData(self.mjm)
-            assert self.pert is not None
-
-            for i in range(self.env.unwrapped.num_envs):
-              if i == self.env_idx:
-                continue
-              self.vd.qpos[:] = sim_data.qpos[i].cpu().numpy()
-              self.vd.qvel[:] = sim_data.qvel[i].cpu().numpy()
+              # Primary env (selected) into mjd.
+              self.mjd.qpos[:] = sim_data.qpos[self.env_idx].cpu().numpy()
+              self.mjd.qvel[:] = sim_data.qvel[self.env_idx].cpu().numpy()
               if self.mjm.nmocap > 0:
-                self.vd.mocap_pos[:] = sim_data.mocap_pos[i].cpu().numpy()
-                self.vd.mocap_quat[:] = sim_data.mocap_quat[i].cpu().numpy()
-              mujoco.mj_forward(self.mjm, self.vd)
+                self.mjd.mocap_pos[:] = sim_data.mocap_pos[self.env_idx].cpu().numpy()
+                self.mjd.mocap_quat[:] = sim_data.mocap_quat[self.env_idx].cpu().numpy()
+              mujoco.mj_forward(self.mjm, self.mjd)
 
-              start = int(v.user_scn.ngeom)
-              mujoco.mjv_addGeoms(self.mjm, self.vd, self.vopt, self.pert, self.catmask, v.user_scn)
-              origin = self._env_origins[i]
-              for gi in range(start, int(v.user_scn.ngeom)):
-                v.user_scn.geoms[gi].pos[0] += float(origin[0])
-                v.user_scn.geoms[gi].pos[1] += float(origin[1])
-                v.user_scn.geoms[gi].pos[2] += float(origin[2])
+              v.user_scn.ngeom = 0
+              if self._show_debug_vis and hasattr(self.env.unwrapped, "update_visualizers"):
+                from mjlab.viewer.native.visualizer import MujocoNativeDebugVisualizer
 
-            v.sync(state_only=True)
+                visualizer = MujocoNativeDebugVisualizer(v.user_scn, self.mjm, self.env_idx)
+                self.env.unwrapped.update_visualizers(visualizer)
 
-      if args.realtime:
-        class _GridEnvNativeViewerRT(_RealTimeStepMixin, _GridEnvNativeViewer):
-          pass
+              # Render other envs (offset into a grid so they don't overlap).
+              if self.vd is None:
+                self.vd = mujoco.MjData(self.mjm)
+              assert self.pert is not None
 
-        viewer = _GridEnvNativeViewerRT(env, policy, frame_rate=fps)
-        viewer._rt_init(env.unwrapped.step_dt)
+              for i in range(self.env.unwrapped.num_envs):
+                if i == self.env_idx:
+                  continue
+                self.vd.qpos[:] = sim_data.qpos[i].cpu().numpy()
+                self.vd.qvel[:] = sim_data.qvel[i].cpu().numpy()
+                if self.mjm.nmocap > 0:
+                  self.vd.mocap_pos[:] = sim_data.mocap_pos[i].cpu().numpy()
+                  self.vd.mocap_quat[:] = sim_data.mocap_quat[i].cpu().numpy()
+                mujoco.mj_forward(self.mjm, self.vd)
+
+                start = int(v.user_scn.ngeom)
+                mujoco.mjv_addGeoms(self.mjm, self.vd, self.vopt, self.pert, self.catmask, v.user_scn)
+                origin = self._env_origins[i]
+                for gi in range(start, int(v.user_scn.ngeom)):
+                  v.user_scn.geoms[gi].pos[0] += float(origin[0])
+                  v.user_scn.geoms[gi].pos[1] += float(origin[1])
+                  v.user_scn.geoms[gi].pos[2] += float(origin[2])
+
+              v.sync(state_only=True)
+
+        if args.realtime:
+          class _GridEnvNativeViewerRT(_RealTimeStepMixin, _GridEnvNativeViewer):
+            pass
+
+          viewer = _GridEnvNativeViewerRT(env, policy, frame_rate=fps)
+          viewer._rt_init(env.unwrapped.step_dt)
+        else:
+          viewer = _GridEnvNativeViewer(env, policy, frame_rate=fps)
+        viewer.run(num_steps=num_steps)
       else:
-        viewer = _GridEnvNativeViewer(env, policy, frame_rate=fps)
-      viewer.run(num_steps=num_steps)
+        # By default, render only the selected env. This avoids overlapping robots
+        # when the scene spacing is not reflected in the native viewer.
+        class _SingleEnvNativeViewer(NativeMujocoViewer):
+          def setup(self) -> None:
+            super().setup()
+            self.vd = None
+
+        if args.realtime:
+          class _SingleEnvNativeViewerRT(_RealTimeStepMixin, _SingleEnvNativeViewer):
+            pass
+
+          viewer = _SingleEnvNativeViewerRT(env, policy, frame_rate=fps)
+          viewer._rt_init(env.unwrapped.step_dt)
+        else:
+          viewer = _SingleEnvNativeViewer(env, policy, frame_rate=fps)
+        viewer.run(num_steps=num_steps)
+    elif viewer_backend == "viser":
+      print("[INFO] viser: open the printed URL in your browser to view the scene; Ctrl-C to stop.")
+      ViserPlayViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
     else:
-      # By default, render only the selected env. This avoids overlapping robots
-      # when the scene spacing is not reflected in the native viewer.
-      class _SingleEnvNativeViewer(NativeMujocoViewer):
-        def setup(self) -> None:
-          super().setup()
-          self.vd = None
-
-      if args.realtime:
-        class _SingleEnvNativeViewerRT(_RealTimeStepMixin, _SingleEnvNativeViewer):
-          pass
-
-        viewer = _SingleEnvNativeViewerRT(env, policy, frame_rate=fps)
-        viewer._rt_init(env.unwrapped.step_dt)
-      else:
-        viewer = _SingleEnvNativeViewer(env, policy, frame_rate=fps)
-      viewer.run(num_steps=num_steps)
-  elif viewer_backend == "viser":
-    ViserPlayViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
-  else:
-    raise RuntimeError(f"Unsupported viewer backend: {viewer_backend}")
+      raise RuntimeError(f"Unsupported viewer backend: {viewer_backend}")
+  except KeyboardInterrupt:
+    print("\n[INFO] interrupted by user, closing viewer...")
 
   env.close()
 
