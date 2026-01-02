@@ -1,0 +1,46 @@
+{
+  "name": "finetune_qstd0p05_model299",
+  "ts_utc": "2026-01-02T08:13:46Z",
+  "train_run_dir": "logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_16-10-55_finetune_qstd0p05",
+  "checkpoint": "logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_16-10-55_finetune_qstd0p05/model_299.pt",
+  "eval": {
+    "site": "tcp",
+    "steps": 2000,
+    "metrics": {
+      "joint_rmse_rad": {
+        "mean": 0.00035628050682134926,
+        "p95": 0.0006381729617714882,
+        "max": 0.0006410304340533912
+      },
+      "per_joint_rmse_rad": {
+        "j1": 0.0002859286905732006,
+        "j2": 1.4441505300055724e-05,
+        "j3": 7.684302545385435e-05,
+        "j4": 0.0009789111791178584,
+        "j5": 1.2584174328367226e-05,
+        "j6": 5.234540731180459e-05
+      },
+      "tcp_err_mm": {
+        "mean": 0.304240345954895,
+        "p95": 0.5560027360916138,
+        "max": 0.559002697467804
+      },
+      "residual_tau_abs_nm": {
+        "mean": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      }
+    }
+  },
+  "plots": {
+    "joint_error_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_299_5da2b882_tcp_2000_kpna_kdna_tauna/joint_error.png",
+    "joint_vel_error_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_299_5da2b882_tcp_2000_kpna_kdna_tauna/joint_vel_error.png",
+    "torque_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_299_5da2b882_tcp_2000_kpna_kdna_tauna/torque.png",
+    "action_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_299_5da2b882_tcp_2000_kpna_kdna_tauna/action.png"
+  },
+  "git": {
+    "code_commit": "1634b76a7fd5082084405788fe041d8176f2776f",
+    "repo": "ssh://git@ssh.github.com:443/zhuyanhe1975-hit/NeuArm.git"
+  },
+  "note": "This milestone records a high-precision joint-space tracking policy using NN gain scheduling (no residual torque). Checkpoint and plots live under logs/ (gitignored)."
+}
