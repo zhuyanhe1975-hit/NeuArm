@@ -29,6 +29,13 @@ def main() -> None:
   parser.add_argument("--effort-limit", type=float, default=300.0)
   parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
   parser.add_argument("--preset", type=str, default="", help="Optional preset: fine")
+  # Command distribution overrides (stress-test training).
+  parser.add_argument("--cmd-sine-freq-lo", type=float, default=None, help="Override sine freq lower bound (Hz)")
+  parser.add_argument("--cmd-sine-freq-hi", type=float, default=None, help="Override sine freq upper bound (Hz)")
+  parser.add_argument("--cmd-sine-cycles-lo", type=int, default=None, help="Override sine cycles lower bound (int)")
+  parser.add_argument("--cmd-sine-cycles-hi", type=int, default=None, help="Override sine cycles upper bound (int)")
+  parser.add_argument("--cmd-joint-delta-scale", type=float, default=None, help="Override joint_delta_scale (fraction of joint range)")
+  parser.add_argument("--cmd-j6-scale", type=float, default=None, help="Override joint 6 scale inside joint_delta_scale_by_joint (others unchanged)")
   parser.add_argument(
     "--action-mode",
     type=str,
@@ -112,6 +119,37 @@ def main() -> None:
   )
   env_cfg = make_irb2400_tracking_env_cfg(params=params)
 
+  # Optional: override command distribution (for stress-tests).
+  cmd_cfg = env_cfg.commands.get("traj")
+  if cmd_cfg is not None:
+    if args.cmd_sine_freq_lo is not None or args.cmd_sine_freq_hi is not None:
+      lo, hi = getattr(cmd_cfg, "sine_freq_hz_range", (0.2, 1.0))
+      if args.cmd_sine_freq_lo is not None:
+        lo = float(args.cmd_sine_freq_lo)
+      if args.cmd_sine_freq_hi is not None:
+        hi = float(args.cmd_sine_freq_hi)
+      cmd_cfg.sine_freq_hz_range = (lo, hi)
+    if args.cmd_sine_cycles_lo is not None or args.cmd_sine_cycles_hi is not None:
+      lo, hi = getattr(cmd_cfg, "sine_cycles_range", (1, 3))
+      if args.cmd_sine_cycles_lo is not None:
+        lo = int(args.cmd_sine_cycles_lo)
+      if args.cmd_sine_cycles_hi is not None:
+        hi = int(args.cmd_sine_cycles_hi)
+      cmd_cfg.sine_cycles_range = (lo, hi)
+    if args.cmd_joint_delta_scale is not None:
+      cmd_cfg.joint_delta_scale = float(args.cmd_joint_delta_scale)
+    if args.cmd_j6_scale is not None:
+      scales = getattr(cmd_cfg, "joint_delta_scale_by_joint", None)
+      if scales is not None and len(scales) == 6:
+        cmd_cfg.joint_delta_scale_by_joint = (
+          float(scales[0]),
+          float(scales[1]),
+          float(scales[2]),
+          float(scales[3]),
+          float(scales[4]),
+          float(args.cmd_j6_scale),
+        )
+
   act = env_cfg.actions[ACTION_TERM_NAME]
   if str(args.action_mode).strip().lower() == "gain_sched":
     # Configure gain scheduling action term safely (do not disturb baseline at a=0).
@@ -193,6 +231,13 @@ def main() -> None:
           "sim_dt_s": float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)),
           "decimation": int(getattr(env_cfg, "decimation", 1)),
           "step_dt_s": step_dt_s,
+        },
+        "command_override": {
+          "trajectory_type": getattr(cmd_cfg, "trajectory_type", None) if cmd_cfg is not None else None,
+          "sine_freq_hz_range": getattr(cmd_cfg, "sine_freq_hz_range", None) if cmd_cfg is not None else None,
+          "sine_cycles_range": getattr(cmd_cfg, "sine_cycles_range", None) if cmd_cfg is not None else None,
+          "joint_delta_scale": getattr(cmd_cfg, "joint_delta_scale", None) if cmd_cfg is not None else None,
+          "joint_delta_scale_by_joint": getattr(cmd_cfg, "joint_delta_scale_by_joint", None) if cmd_cfg is not None else None,
         },
       },
     )
