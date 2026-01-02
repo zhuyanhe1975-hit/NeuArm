@@ -71,6 +71,7 @@ conda run -n mjwarp_env python scripts/play_irb2400_tracking.py --device cuda:0 
 常用选项：
 - 固定相机参考（避免“基座在动”的错觉）：`--camera root`（默认）或 `--camera world`
 - 多 env 时默认只显示一个（用 `,/.` 切换）。如需同时显示全部：`--show-other-envs`
+- 实时播放（按墙上钟表）：`--realtime`（会自动设置 `fps ~= 1/step_dt`，例如 5ms 控制步长对应 200Hz）
 
 按键（native viewer）：
 - `ENTER`：reset

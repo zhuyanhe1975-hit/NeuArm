@@ -61,7 +61,12 @@ def main() -> None:
   )
   parser.add_argument("--steps", type=int, default=0, help="Stop after N env steps (0 = run until window closes)")
   parser.add_argument("--viewer", type=str, default="auto", help="native | viser | auto")
-  parser.add_argument("--fps", type=float, default=60.0, help="Viewer frame rate")
+  parser.add_argument("--fps", type=float, default=60.0, help="Viewer frame rate (ignored when --realtime is set)")
+  parser.add_argument(
+    "--realtime",
+    action="store_true",
+    help="Run viewer at real-time (wall clock) by setting fps ~= 1/step_dt (e.g., 200Hz for 5ms control step).",
+  )
   args = parser.parse_args()
 
   repo_root = Path(__file__).resolve().parents[1]
@@ -174,6 +179,10 @@ def main() -> None:
     policy = runner.get_inference_policy(device=device)
     print(f"[INFO] loaded policy from checkpoint: {resolved_checkpoint}")
 
+  fps = float(args.fps)
+  if args.realtime:
+    fps = 1.0 / max(float(env.unwrapped.step_dt), 1e-6)
+  print(f"[INFO] viewer fps={fps:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
   print("[INFO] native viewer keys: ENTER=reset SPACE=pause/resume -=slower +=faster ,/.=prev/next env (when num_envs>1)")
 
   num_steps = None if int(args.steps) <= 0 else int(args.steps)
@@ -235,7 +244,7 @@ def main() -> None:
 
             v.sync(state_only=True)
 
-      _GridEnvNativeViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+      _GridEnvNativeViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
     else:
       # By default, render only the selected env. This avoids overlapping robots
       # when the scene spacing is not reflected in the native viewer.
@@ -244,9 +253,9 @@ def main() -> None:
           super().setup()
           self.vd = None
 
-      _SingleEnvNativeViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+      _SingleEnvNativeViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
   elif viewer_backend == "viser":
-    ViserPlayViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+    ViserPlayViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
   else:
     raise RuntimeError(f"Unsupported viewer backend: {viewer_backend}")
 
