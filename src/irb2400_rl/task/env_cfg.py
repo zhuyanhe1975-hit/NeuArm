@@ -152,6 +152,8 @@ def make_irb2400_tracking_env_cfg(
     ),
     # Strongly prefer "do nothing" initially; PPO quickly discovers baseline tracking.
     "action_l2": RewardTermCfg(func=mdp.action_l2, weight=-1e-2),
+    # Also penalize action changes to avoid residual-induced jitter.
+    "action_rate_l2": RewardTermCfg(func=mdp.action_rate_l2, weight=-5e-3),
   }
 
   terminations = {

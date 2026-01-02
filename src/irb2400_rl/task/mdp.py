@@ -73,6 +73,13 @@ def action_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
   return torch.sum(a * a, dim=-1)
 
 
+def action_rate_l2(env: "ManagerBasedRlEnv") -> torch.Tensor:
+  a = env.action_manager.action
+  prev = env.action_manager.prev_action
+  da = a - prev
+  return torch.sum(da * da, dim=-1)
+
+
 def joint_pos_outside_soft_limits(
   env: "ManagerBasedRlEnv",
   asset_cfg: SceneEntityCfg = _DEFAULT_ROBOT_CFG,

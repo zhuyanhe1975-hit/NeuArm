@@ -16,6 +16,13 @@ def main() -> None:
   parser.add_argument("--decimation", type=int, default=5)
   parser.add_argument("--episode-length-s", type=float, default=6.0)
   parser.add_argument("--effort-limit", type=float, default=300.0)
+  # Residual torque safety knobs (start small; ramp in slowly).
+  parser.add_argument("--residual-scale", type=float, default=2.0)
+  parser.add_argument("--residual-clip", type=float, default=5.0)
+  parser.add_argument("--residual-ramp-steps", type=int, default=500000)
+  parser.add_argument("--residual-filter-tau", type=float, default=0.03)
+  parser.add_argument("--action-l2-weight", type=float, default=-1e-2)
+  parser.add_argument("--action-rate-weight", type=float, default=-5e-3)
   parser.add_argument("--device", type=str, default=None, help="cpu | cuda:0 | auto")
   parser.add_argument("--max-iterations", type=int, default=1000)
   parser.add_argument("--num-steps-per-env", type=int, default=32)
@@ -64,6 +71,18 @@ def main() -> None:
       effort_limit=args.effort_limit,
     )
   )
+
+  # Configure residual torque action term safely (do not disturb baseline).
+  act = env_cfg.actions["residual_tau"]
+  act.residual_scale = float(args.residual_scale)
+  act.residual_clip = float(args.residual_clip)
+  act.residual_ramp_steps = int(args.residual_ramp_steps)
+  act.residual_filter_tau = float(args.residual_filter_tau)
+
+  # Configure reward weights (action regularization).
+  env_cfg.rewards["action_l2"].weight = float(args.action_l2_weight)
+  if "action_rate_l2" in env_cfg.rewards:
+    env_cfg.rewards["action_rate_l2"].weight = float(args.action_rate_weight)
 
   agent_cfg = RslRlOnPolicyRunnerCfg(
     policy=RslRlPpoActorCriticCfg(

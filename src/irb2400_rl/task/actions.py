@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import torch
+import math
 
 from mjlab.managers.action_manager import ActionTerm
 from mjlab.managers.manager_term_config import ActionTermCfg
@@ -33,6 +34,7 @@ class ResidualComputedTorqueAction(ActionTerm):
 
     self._raw_actions = torch.zeros(self.num_envs, self._action_dim, device=self.device)
     self._i_err = torch.zeros_like(self._raw_actions)
+    self._tau_resid_filt = torch.zeros_like(self._raw_actions)
 
     if cfg.ctff_joint_mask is not None and len(cfg.ctff_joint_mask) != self._action_dim:
       raise ValueError(
@@ -61,6 +63,7 @@ class ResidualComputedTorqueAction(ActionTerm):
   def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
     self._raw_actions[env_ids] = 0.0
     self._i_err[env_ids] = 0.0
+    self._tau_resid_filt[env_ids] = 0.0
 
   def process_actions(self, actions: torch.Tensor) -> None:
     self._raw_actions[:] = actions
@@ -142,9 +145,20 @@ class ResidualComputedTorqueAction(ActionTerm):
             tau_mass = tau_mass * mask
           tau_ff = tau_ff + tau_mass
 
-    tau_resid = self.cfg.residual_scale * self._raw_actions
+    residual_scale = float(self.cfg.residual_scale)
+    if self.cfg.residual_ramp_steps and self.cfg.residual_ramp_steps > 0:
+      ramp = min(1.0, float(self._env.common_step_counter) / float(self.cfg.residual_ramp_steps))
+      residual_scale = residual_scale * ramp
+
+    tau_resid = residual_scale * self._raw_actions
     if self.cfg.residual_clip is not None:
       tau_resid = torch.clamp(tau_resid, -self.cfg.residual_clip, self.cfg.residual_clip)
+
+    if self.cfg.residual_filter_tau and self.cfg.residual_filter_tau > 0.0:
+      # First-order low-pass: y <- a*y + (1-a)*x, a = exp(-dt/tau)
+      a = math.exp(-dt / float(self.cfg.residual_filter_tau))
+      self._tau_resid_filt.mul_(a).add_(tau_resid, alpha=(1.0 - a))
+      tau_resid = self._tau_resid_filt
 
     tau = tau_ff + tau_pid + tau_resid
     tau = torch.clamp(tau, -self.cfg.effort_limit, self.cfg.effort_limit)
@@ -162,6 +176,11 @@ class ResidualComputedTorqueActionCfg(ActionTermCfg):
   # Residual (NN) scaling.
   residual_scale: float = 30.0
   residual_clip: float | None = 60.0
+  # Safety: slowly ramp in residual authority over global env steps
+  # (control steps, i.e. decimated steps). 0 disables ramping.
+  residual_ramp_steps: int = 0
+  # Safety: low-pass filter residual torque (seconds). 0 disables filtering.
+  residual_filter_tau: float = 0.0
 
   # Variable-gain PID (joint-space).
   kp_min: float = 50.0
