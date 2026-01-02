@@ -68,6 +68,10 @@ conda run -n mjwarp_env python scripts/play_irb2400_tracking.py --device cuda:0
 conda run -n mjwarp_env python scripts/play_irb2400_tracking.py --device cuda:0 --checkpoint logs/rsl_rl/neuarm_irb2400_tracking/<run>/model_299.pt
 ```
 
+常用选项：
+- 固定相机参考（避免“基座在动”的错觉）：`--camera root`（默认）或 `--camera world`
+- 多 env 时默认只显示一个（用 `,/.` 切换）。如需同时显示全部：`--show-other-envs`
+
 按键（native viewer）：
 - `ENTER`：reset
 - `SPACE`：pause/resume

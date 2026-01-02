@@ -34,6 +34,13 @@ def main() -> None:
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
   parser.add_argument("--num-envs", type=int, default=1, help="Number of parallel envs (use ,/. to switch when >1)")
   parser.add_argument("--env-idx", type=int, default=0, help="Initial env index to view")
+  parser.add_argument("--show-other-envs", action="store_true", help="Render all envs at once (otherwise only the selected env is shown)")
+  parser.add_argument(
+    "--camera",
+    type=str,
+    default="root",
+    help="Camera reference: world | root | link6 (default: root). link6 tracks the EE so the base may appear to move.",
+  )
   parser.add_argument("--steps", type=int, default=0, help="Stop after N env steps (0 = run until window closes)")
   parser.add_argument("--viewer", type=str, default="auto", help="native | viser | auto")
   parser.add_argument("--fps", type=float, default=60.0, help="Viewer frame rate")
@@ -67,7 +74,7 @@ def main() -> None:
     RslRlPpoAlgorithmCfg,
     RslRlVecEnvWrapper,
   )
-  from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer
+  from mjlab.viewer import NativeMujocoViewer, ViserPlayViewer, ViewerConfig
 
   from rsl_rl.runners import OnPolicyRunner
 
@@ -80,6 +87,21 @@ def main() -> None:
     play=True,
   )
   env_cfg.viewer.env_idx = int(args.env_idx)
+  cam = (args.camera or "").strip().lower()
+  if cam == "world":
+    env_cfg.viewer.origin_type = ViewerConfig.OriginType.WORLD
+    env_cfg.viewer.entity_name = None
+    env_cfg.viewer.body_name = None
+  elif cam in ("root", "base"):
+    env_cfg.viewer.origin_type = ViewerConfig.OriginType.ASSET_ROOT
+    env_cfg.viewer.entity_name = "robot"
+    env_cfg.viewer.body_name = None
+  elif cam in ("link6", "ee", "tcp"):
+    env_cfg.viewer.origin_type = ViewerConfig.OriginType.ASSET_BODY
+    env_cfg.viewer.entity_name = "robot"
+    env_cfg.viewer.body_name = "link_6"
+  else:
+    raise ValueError(f"Unsupported --camera '{args.camera}', expected world|root|link6")
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   env = RslRlVecEnvWrapper(env, clip_actions=1.0)
@@ -138,7 +160,17 @@ def main() -> None:
 
   num_steps = None if int(args.steps) <= 0 else int(args.steps)
   if viewer_backend == "native":
-    NativeMujocoViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+    if args.show_other_envs:
+      NativeMujocoViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
+    else:
+      # By default, render only the selected env. This avoids overlapping robots
+      # when the scene spacing is not reflected in the native viewer.
+      class _SingleEnvNativeViewer(NativeMujocoViewer):
+        def setup(self) -> None:
+          super().setup()
+          self.vd = None
+
+      _SingleEnvNativeViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
   elif viewer_backend == "viser":
     ViserPlayViewer(env, policy, frame_rate=float(args.fps)).run(num_steps=num_steps)
   else:
@@ -149,4 +181,3 @@ def main() -> None:
 
 if __name__ == "__main__":
   main()
-
