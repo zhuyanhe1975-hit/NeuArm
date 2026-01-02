@@ -1,5 +1,9 @@
-.warp_cache/
-logs/
 __pycache__/
 *.pyc
 .DS_Store
+.warp_cache/
+logs/
+
+# Local / experimental assets (do not commit)
+assets/effort_er210/
+assets/effot_er15/

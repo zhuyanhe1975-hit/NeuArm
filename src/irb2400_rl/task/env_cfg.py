@@ -20,9 +20,12 @@ from mjlab.sim import MujocoCfg, SimulationCfg
 from mjlab.viewer import ViewerConfig
 
 from irb2400_rl.robot.irb2400_cfg import Irb2400ActuatorLimits, get_irb2400_robot_cfg
-from irb2400_rl.task.actions import ResidualComputedTorqueActionCfg
+from irb2400_rl.task.actions import GainScheduledComputedTorqueActionCfg
 from irb2400_rl.task.commands import JointTrajectoryCommandCfg
 from irb2400_rl.task import mdp
+
+
+ACTION_TERM_NAME = "gain_sched"
 
 
 @dataclass(frozen=True)
@@ -101,14 +104,11 @@ def make_irb2400_tracking_env_cfg(
   }
 
   actions: dict[str, ActionTermCfg] = {
-    "residual_tau": ResidualComputedTorqueActionCfg(
+    ACTION_TERM_NAME: GainScheduledComputedTorqueActionCfg(
       entity_name="robot",
       command_name="traj",
       actuator_names=(r".*joint_[1-6]$",),
       effort_limit=params.effort_limit,
-      # Stage-0 stable controller: PD + gravity compensation, no residual.
-      residual_scale=0.0,
-      residual_clip=0.0,
       # Stronger PD for tight joint tracking while staying stable.
       kp_min=50.0,
       kp_max=350.0,
@@ -124,6 +124,11 @@ def make_irb2400_tracking_env_cfg(
       # j6: keep stiffness modest but add damping to avoid oscillation.
       kp_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 4.0),
       kd_joint_scale=(2.0, 2.0, 2.0, 0.7, 0.7, 12.0),
+      # Start with limited gain-scheduling authority and ramp it in.
+      kp_delta_max=0.15,
+      kd_delta_max=0.15,
+      gain_ramp_steps=500000,
+      gain_filter_tau=0.03,
       ff_mode="ctff",
       ctff_joint_mask=(True, True, True, True, True, False),
     ),

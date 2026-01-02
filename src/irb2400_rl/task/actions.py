@@ -227,3 +227,250 @@ class ResidualComputedTorqueActionCfg(ActionTermCfg):
 
   def build(self, env: "ManagerBasedRlEnv") -> ResidualComputedTorqueAction:
     return ResidualComputedTorqueAction(self, env)
+
+
+class GainScheduledComputedTorqueAction(ActionTerm):
+  """Computed-torque + variable-gain PD, where the policy schedules gains.
+
+  Action format (per env): concatenated [-1, 1] vectors:
+    a = [a_kp(num_joints), a_kd(num_joints)]
+  mapped to gain multipliers:
+    kp <- kp * clamp(1 + kp_delta * a_kp, kp_mult_min, kp_mult_max)
+    kd <- kd * clamp(1 + kd_delta * a_kd, kd_mult_min, kd_mult_max)
+
+  With a=0, behavior matches the baseline controller (bias/CTFF + variable-gain PD).
+  """
+
+  cfg: "GainScheduledComputedTorqueActionCfg"
+
+  def __init__(self, cfg: "GainScheduledComputedTorqueActionCfg", env: "ManagerBasedRlEnv"):
+    super().__init__(cfg=cfg, env=env)
+    self.robot: "Entity" = self._entity
+
+    # Keep joint ordering consistent with the command generator.
+    joint_ids, _ = self.robot.find_joints(cfg.actuator_names, preserve_order=True)
+    if len(joint_ids) == 0:
+      raise ValueError(f"No actuated joints matched: {cfg.actuator_names}")
+
+    self._joint_ids = torch.tensor(joint_ids, device=self.device, dtype=torch.long)
+    self._num_joints = int(self._joint_ids.numel())
+    self._action_dim = int(2 * self._num_joints)
+
+    self._raw_actions = torch.zeros(self.num_envs, self._action_dim, device=self.device)
+    self._i_err = torch.zeros(self.num_envs, self._num_joints, device=self.device)
+    self._tau_cmd = torch.zeros(self.num_envs, self._num_joints, device=self.device)
+    # Eval script expects this attribute; keep for compatibility (always zero here).
+    self._tau_resid_applied = torch.zeros_like(self._tau_cmd)
+
+    self._kp_mult_filt = torch.ones(self.num_envs, self._num_joints, device=self.device)
+    self._kd_mult_filt = torch.ones(self.num_envs, self._num_joints, device=self.device)
+    self._kp_applied = torch.zeros_like(self._tau_cmd)
+    self._kd_applied = torch.zeros_like(self._tau_cmd)
+
+    if cfg.ctff_joint_mask is not None and len(cfg.ctff_joint_mask) != self._num_joints:
+      raise ValueError(
+        "ctff_joint_mask must match num_joints: "
+        f"{len(cfg.ctff_joint_mask)} != {self._num_joints}"
+      )
+    if cfg.err_scale_by_joint is not None and len(cfg.err_scale_by_joint) != self._num_joints:
+      raise ValueError(
+        "err_scale_by_joint must match num_joints: "
+        f"{len(cfg.err_scale_by_joint)} != {self._num_joints}"
+      )
+    if cfg.kp_joint_scale is not None and len(cfg.kp_joint_scale) != self._num_joints:
+      raise ValueError(
+        "kp_joint_scale must match num_joints: "
+        f"{len(cfg.kp_joint_scale)} != {self._num_joints}"
+      )
+    if cfg.kd_joint_scale is not None and len(cfg.kd_joint_scale) != self._num_joints:
+      raise ValueError(
+        "kd_joint_scale must match num_joints: "
+        f"{len(cfg.kd_joint_scale)} != {self._num_joints}"
+      )
+
+    joint_v_adr = self.robot.data.indexing.joint_v_adr
+    self._dof_ids = joint_v_adr[self._joint_ids].to(dtype=torch.long)
+
+  @property
+  def action_dim(self) -> int:
+    return self._action_dim
+
+  @property
+  def raw_action(self) -> torch.Tensor:
+    return self._raw_actions
+
+  @property
+  def tau_resid_applied(self) -> torch.Tensor:
+    return self._tau_resid_applied
+
+  @property
+  def tau_cmd(self) -> torch.Tensor:
+    return self._tau_cmd
+
+  @property
+  def kp_applied(self) -> torch.Tensor:
+    return self._kp_applied
+
+  @property
+  def kd_applied(self) -> torch.Tensor:
+    return self._kd_applied
+
+  def reset(self, env_ids: torch.Tensor | slice | None = None) -> None:
+    self._raw_actions[env_ids] = 0.0
+    self._i_err[env_ids] = 0.0
+    self._tau_cmd[env_ids] = 0.0
+    self._tau_resid_applied[env_ids] = 0.0
+    self._kp_mult_filt[env_ids] = 1.0
+    self._kd_mult_filt[env_ids] = 1.0
+    self._kp_applied[env_ids] = 0.0
+    self._kd_applied[env_ids] = 0.0
+
+  def process_actions(self, actions: torch.Tensor) -> None:
+    self._raw_actions[:] = actions
+
+  def apply_actions(self) -> None:
+    dt = float(self._env.step_dt)
+
+    cmd = self._env.command_manager.get_command(self.cfg.command_name)
+    q_des = cmd[:, 0 : self._num_joints]
+    qd_des = cmd[:, 6 : 6 + self._num_joints]
+    qdd_des = cmd[:, 12 : 12 + self._num_joints]
+
+    q = self.robot.data.joint_pos[:, self._joint_ids]
+    qd = self.robot.data.joint_vel[:, self._joint_ids]
+
+    err = q_des - q
+    err_d = qd_des - qd
+
+    if self.cfg.ki != 0.0:
+      self._i_err.add_(err * dt)
+      self._i_err.clamp_(-self.cfg.integral_limit, self.cfg.integral_limit)
+
+    abs_err = torch.abs(err)
+    if self.cfg.err_scale_by_joint is None:
+      err_scale = float(self.cfg.err_scale)
+      gain_alpha = torch.tanh(abs_err / max(err_scale, 1e-6))
+    else:
+      err_scale = torch.tensor(
+        self.cfg.err_scale_by_joint, device=self.device, dtype=abs_err.dtype
+      ).view(1, -1)
+      gain_alpha = torch.tanh(abs_err / torch.clamp(err_scale, min=1e-6))
+
+    kp = self.cfg.kp_min + (self.cfg.kp_max - self.cfg.kp_min) * gain_alpha
+    kd = self.cfg.kd_min + (self.cfg.kd_max - self.cfg.kd_min) * gain_alpha
+
+    if self.cfg.kp_joint_scale is not None:
+      kp_scale = torch.tensor(
+        self.cfg.kp_joint_scale, device=self.device, dtype=kp.dtype
+      ).view(1, -1)
+      kp = kp * kp_scale
+    if self.cfg.kd_joint_scale is not None:
+      kd_scale = torch.tensor(
+        self.cfg.kd_joint_scale, device=self.device, dtype=kd.dtype
+      ).view(1, -1)
+      kd = kd * kd_scale
+
+    a = torch.clamp(self._raw_actions, -1.0, 1.0)
+    a_kp = a[:, : self._num_joints]
+    a_kd = a[:, self._num_joints :]
+
+    ramp = 1.0
+    if self.cfg.gain_ramp_steps and self.cfg.gain_ramp_steps > 0:
+      ramp = min(1.0, float(self._env.common_step_counter) / float(self.cfg.gain_ramp_steps))
+
+    kp_delta = float(self.cfg.kp_delta_max) * ramp
+    kd_delta = float(self.cfg.kd_delta_max) * ramp
+    kp_mult = 1.0 + kp_delta * a_kp
+    kd_mult = 1.0 + kd_delta * a_kd
+
+    kp_mult = torch.clamp(kp_mult, float(self.cfg.kp_mult_min), float(self.cfg.kp_mult_max))
+    kd_mult = torch.clamp(kd_mult, float(self.cfg.kd_mult_min), float(self.cfg.kd_mult_max))
+
+    if self.cfg.gain_filter_tau and self.cfg.gain_filter_tau > 0.0:
+      alpha = math.exp(-dt / float(self.cfg.gain_filter_tau))
+      self._kp_mult_filt.mul_(alpha).add_(kp_mult, alpha=(1.0 - alpha))
+      self._kd_mult_filt.mul_(alpha).add_(kd_mult, alpha=(1.0 - alpha))
+      kp_mult = self._kp_mult_filt
+      kd_mult = self._kd_mult_filt
+
+    kp = kp * kp_mult
+    kd = kd * kd_mult
+    self._kp_applied[:] = kp
+    self._kd_applied[:] = kd
+
+    tau_pid = kp * err + kd * err_d + self.cfg.ki * self._i_err
+
+    tau_ff = 0.0
+    ff_mode = self.cfg.ff_mode.lower()
+    if ff_mode not in ("none", "gravcomp", "bias", "ctff"):
+      raise ValueError(
+        f"Unsupported ff_mode='{self.cfg.ff_mode}', expected none|gravcomp|bias|ctff"
+      )
+
+    if ff_mode != "none":
+      nv = int(self._env.sim.mj_model.nv)
+      dof = self._dof_ids
+
+      if ff_mode == "gravcomp":
+        qfrc = self._env.sim.data.qfrc_gravcomp[:, :nv].contiguous()
+        tau_ff = qfrc.index_select(1, dof)
+      else:
+        qfrc_bias = self._env.sim.data.qfrc_bias[:, :nv].contiguous()
+        tau_ff = qfrc_bias.index_select(1, dof)
+
+        if ff_mode == "ctff":
+          qM = self._env.sim.data.qM[:, :nv, :nv].contiguous()
+          qM_sub = qM.index_select(1, dof).index_select(2, dof).contiguous()
+          qdd = qdd_des.contiguous()
+          tau_mass = torch.sum(qM_sub * qdd.unsqueeze(1), dim=-1)
+          if self.cfg.ctff_joint_mask is not None:
+            mask = torch.tensor(
+              self.cfg.ctff_joint_mask, device=self.device, dtype=tau_mass.dtype
+            ).view(1, -1)
+            tau_mass = tau_mass * mask
+          tau_ff = tau_ff + tau_mass
+
+    tau = tau_ff + tau_pid
+    tau = torch.clamp(tau, -self.cfg.effort_limit, self.cfg.effort_limit)
+
+    self._tau_cmd[:] = tau
+    self._tau_resid_applied.zero_()
+    self.robot.set_joint_effort_target(tau, joint_ids=self._joint_ids)
+
+
+@dataclass(kw_only=True)
+class GainScheduledComputedTorqueActionCfg(ActionTermCfg):
+  entity_name: str = "robot"
+  clip: dict[str, tuple] | None = None
+  command_name: str = "traj"
+  actuator_names: tuple[str, ...] = (r".*joint_[1-6]$",)
+  effort_limit: float = 300.0
+
+  # Gain scheduling authority (multipliers around 1.0).
+  kp_delta_max: float = 0.5
+  kd_delta_max: float = 0.5
+  kp_mult_min: float = 0.2
+  kp_mult_max: float = 3.0
+  kd_mult_min: float = 0.2
+  kd_mult_max: float = 3.0
+  gain_ramp_steps: int = 0
+  gain_filter_tau: float = 0.0
+
+  # Baseline variable-gain PID (joint-space).
+  kp_min: float = 50.0
+  kp_max: float = 300.0
+  kd_min: float = 2.0
+  kd_max: float = 30.0
+  ki: float = 0.0
+  err_scale: float = 0.15
+  err_scale_by_joint: tuple[float, ...] | None = None
+  integral_limit: float = 0.2
+  kp_joint_scale: tuple[float, ...] | None = None
+  kd_joint_scale: tuple[float, ...] | None = None
+
+  # Feedforward mode.
+  ff_mode: str = "gravcomp"
+  ctff_joint_mask: tuple[bool, ...] | None = None
+
+  def build(self, env: "ManagerBasedRlEnv") -> GainScheduledComputedTorqueAction:
+    return GainScheduledComputedTorqueAction(self, env)

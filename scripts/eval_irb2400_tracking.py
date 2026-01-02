@@ -90,6 +90,15 @@ def _save_eval_plots(
 
   T = int(joint_err_rad.shape[0])
   t = np.arange(T, dtype=np.float32) * float(dt_s)
+  num_joints = int(joint_err_rad.shape[1]) if joint_err_rad.ndim == 2 else 0
+
+  def auto_ylim(ax, y: "np.ndarray", p: float = 99.0, min_span: float = 1e-6) -> None:
+    v = np.abs(y).reshape(-1)
+    if v.size == 0:
+      return
+    span = float(np.percentile(v, p)) * 1.2
+    span = max(span, float(min_span))
+    ax.set_ylim(-span, span)
 
   def segment_times() -> list[float]:
     if phase is None or len(phase) != T:
@@ -116,6 +125,7 @@ def _save_eval_plots(
     ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.4)
     add_seg_lines(ax)
     ax.set_title(f"j{i+1} q_err (rad)")
+    auto_ylim(ax, joint_err_rad[:, i])
     ax.grid(True, alpha=0.3)
   for ax in axes:
     ax.set_xlabel("time (s)")
@@ -135,6 +145,7 @@ def _save_eval_plots(
       ax.axhline(0.0, color="k", linewidth=0.5, alpha=0.4)
       add_seg_lines(ax)
       ax.set_title(f"j{i+1} qd_err (rad/s)")
+      auto_ylim(ax, joint_vel_err[:, i])
       ax.grid(True, alpha=0.3)
     for ax in axes:
       ax.set_xlabel("time (s)")
@@ -151,11 +162,13 @@ def _save_eval_plots(
     axes[0].plot(t, tau_resid, linewidth=0.8)
     add_seg_lines(axes[0])
     axes[0].set_title("applied residual torque (N*m) per joint")
+    auto_ylim(axes[0], tau_resid)
     axes[0].grid(True, alpha=0.3)
 
     if tau_cmd is not None and tau_cmd.size:
       axes[1].plot(t, tau_cmd, linewidth=0.8)
       axes[1].set_title("total commanded torque (N*m) per joint")
+      auto_ylim(axes[1], tau_cmd)
     else:
       axes[1].axis('off')
     add_seg_lines(axes[1])
@@ -173,13 +186,20 @@ def _save_eval_plots(
   if raw_action is not None and raw_action.size:
     da = np.diff(raw_action, axis=0, prepend=raw_action[:1])
     fig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)
+
+    title0 = "policy output (raw action) per joint"
+    if num_joints and raw_action.ndim == 2 and raw_action.shape[1] == 2 * num_joints:
+      title0 = "policy output (raw action): [kp(1-6), kd(1-6)]"
+
     axes[0].plot(t, raw_action, linewidth=0.8)
     add_seg_lines(axes[0])
-    axes[0].set_title("policy output (raw action) per joint")
+    axes[0].set_title(title0)
+    auto_ylim(axes[0], raw_action)
     axes[0].grid(True, alpha=0.3)
     axes[1].plot(t, da / max(float(dt_s), 1e-6), linewidth=0.8)
     add_seg_lines(axes[1])
     axes[1].set_title("action rate (approx, per joint)")
+    auto_ylim(axes[1], da / max(float(dt_s), 1e-6))
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xlabel("time (s)")
     fig.suptitle(f"{title_prefix} policy action")
@@ -201,9 +221,9 @@ def main() -> None:
   parser.add_argument("--no-plots", dest="plots", action="store_false", help="Disable saving plots")
   parser.set_defaults(plots=True)
   parser.add_argument("--plot-dpi", type=int, default=160)
-  parser.add_argument("--residual-scale", type=float, default=None, help="Override residual torque scale in eval (N*m per action unit)")
-  parser.add_argument("--residual-clip", type=float, default=None, help="Override residual torque clip in eval (N*m)")
-  parser.add_argument("--residual-filter-tau", type=float, default=None, help="Override residual torque LPF time constant in eval (s)")
+  parser.add_argument("--kp-delta-max", type=float, default=None, help="Override Kp scheduling authority in eval (+/- delta around 1)")
+  parser.add_argument("--kd-delta-max", type=float, default=None, help="Override Kd scheduling authority in eval (+/- delta around 1)")
+  parser.add_argument("--gain-filter-tau", type=float, default=None, help="Override gain multiplier LPF time constant in eval (s)")
   parser.add_argument("--no-record", action="store_true", help="Disable writing eval_history.jsonl")
   args = parser.parse_args()
 
@@ -229,6 +249,7 @@ def main() -> None:
   )
 
   from irb2400_rl.task.env_cfg import (
+    ACTION_TERM_NAME,
     Irb2400TrackingTaskParams,
     make_irb2400_tracking_env_cfg,
   )
@@ -244,24 +265,20 @@ def main() -> None:
     params=Irb2400TrackingTaskParams(num_envs=1),
     play=True,
   )
-  # Optional: override residual torque settings for evaluation.
-  # By default, play-mode env disables residual (residual_scale=0) to keep baseline stable.
-  if args.residual_scale is not None or args.residual_clip is not None or args.residual_filter_tau is not None:
-    act_cfg = env_cfg.actions.get("residual_tau")
+  # Optional: override gain-scheduling settings for evaluation.
+  if args.kp_delta_max is not None or args.kd_delta_max is not None or args.gain_filter_tau is not None:
+    act_cfg = env_cfg.actions.get(ACTION_TERM_NAME)
     if act_cfg is None:
-      raise RuntimeError("Expected action term 'residual_tau' in env_cfg.actions")
-    if args.residual_scale is not None:
-      act_cfg.residual_scale = float(args.residual_scale)
-    if args.residual_clip is not None:
-      act_cfg.residual_clip = float(args.residual_clip)
-    elif args.residual_scale is not None and getattr(act_cfg, "residual_clip", None) in (0.0, 0, None):
-      # If residual enabled but clip wasn't set, use a conservative default.
-      act_cfg.residual_clip = 5.0
-    if args.residual_filter_tau is not None:
-      act_cfg.residual_filter_tau = float(args.residual_filter_tau)
+      raise RuntimeError(f"Expected action term '{ACTION_TERM_NAME}' in env_cfg.actions")
+    if args.kp_delta_max is not None and hasattr(act_cfg, "kp_delta_max"):
+      act_cfg.kp_delta_max = float(args.kp_delta_max)
+    if args.kd_delta_max is not None and hasattr(act_cfg, "kd_delta_max"):
+      act_cfg.kd_delta_max = float(args.kd_delta_max)
+    if args.gain_filter_tau is not None and hasattr(act_cfg, "gain_filter_tau"):
+      act_cfg.gain_filter_tau = float(args.gain_filter_tau)
     print(
-      f"[INFO] eval residual override: scale={getattr(act_cfg,'residual_scale',None)} "
-      f"clip={getattr(act_cfg,'residual_clip',None)} tau={getattr(act_cfg,'residual_filter_tau',None)}"
+      f"[INFO] eval gain override: kp_delta={getattr(act_cfg,'kp_delta_max',None)} "
+      f"kd_delta={getattr(act_cfg,'kd_delta_max',None)} tau={getattr(act_cfg,'gain_filter_tau',None)}"
     )
 
   env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
@@ -270,7 +287,7 @@ def main() -> None:
   dt_s = float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)) * float(getattr(env_cfg, "decimation", 1))
 
   cmd_term = env.command_manager.get_term("traj")
-  act_term = env.action_manager.get_term("residual_tau")
+  act_term = env.action_manager.get_term(ACTION_TERM_NAME)
 
   policy = None
   resolved_checkpoint = args.checkpoint
@@ -400,9 +417,9 @@ def main() -> None:
 
   artifacts: dict[str, str] = {}
   if args.plots:
-    res_tag = "off" if args.residual_scale is None else f"{args.residual_scale:g}"
-    clip_tag = "na" if args.residual_clip is None else f"{args.residual_clip:g}"
-    tau_tag = "na" if args.residual_filter_tau is None else f"{args.residual_filter_tau:g}"
+    kp_tag = "na" if args.kp_delta_max is None else f"{args.kp_delta_max:g}"
+    kd_tag = "na" if args.kd_delta_max is None else f"{args.kd_delta_max:g}"
+    tau_tag = "na" if args.gain_filter_tau is None else f"{args.gain_filter_tau:g}"
     plot_dir = (
       repo_root
       / "logs"
@@ -410,7 +427,7 @@ def main() -> None:
       / "neuarm_irb2400_tracking"
       / "_eval"
       / "plots"
-      / f"{_safe_stem(resolved_checkpoint)}_{_ckpt_id(resolved_checkpoint)}_{args.site}_{args.steps}_res{res_tag}_clip{clip_tag}_tau{tau_tag}"
+      / f"{_safe_stem(resolved_checkpoint)}_{_ckpt_id(resolved_checkpoint)}_{args.site}_{args.steps}_kp{kp_tag}_kd{kd_tag}_tau{tau_tag}"
     )
     joint_err_np = np.asarray(joint_abs_err, dtype=np.float32)
     joint_vel_err_np = np.asarray(joint_vel_err, dtype=np.float32) if len(joint_vel_err) else None

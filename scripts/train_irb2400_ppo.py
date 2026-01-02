@@ -28,11 +28,16 @@ def main() -> None:
   parser.add_argument("--episode-length-s", type=float, default=6.0)
   parser.add_argument("--effort-limit", type=float, default=300.0)
   parser.add_argument("--track-q-std", type=float, default=0.25, help="Std (rad) for track_q reward shaping")
-  # Residual torque safety knobs (start small; ramp in slowly).
-  parser.add_argument("--residual-scale", type=float, default=2.0)
-  parser.add_argument("--residual-clip", type=float, default=5.0)
-  parser.add_argument("--residual-ramp-steps", type=int, default=500000)
-  parser.add_argument("--residual-filter-tau", type=float, default=0.03)
+  # Gain-scheduling authority (start small; ramp in slowly).
+  parser.add_argument("--kp-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kp scheduling (action->multiplier)")
+  parser.add_argument("--kd-delta-max", type=float, default=0.15, help="Max +/- gain multiplier delta for Kd scheduling (action->multiplier)")
+  parser.add_argument("--gain-ramp-steps", type=int, default=500000, help="Ramp-in steps for gain scheduling authority (0 disables)")
+  parser.add_argument("--gain-filter-tau", type=float, default=0.03, help="Low-pass filter time constant for gain multipliers (0 disables)")
+  # Back-compat flags (ignored in gain-scheduling mode).
+  parser.add_argument("--residual-scale", type=float, default=0.0, help=argparse.SUPPRESS)
+  parser.add_argument("--residual-clip", type=float, default=0.0, help=argparse.SUPPRESS)
+  parser.add_argument("--residual-ramp-steps", type=int, default=0, help=argparse.SUPPRESS)
+  parser.add_argument("--residual-filter-tau", type=float, default=0.0, help=argparse.SUPPRESS)
   parser.add_argument("--action-l2-weight", type=float, default=-1e-2)
   parser.add_argument("--action-rate-weight", type=float, default=-5e-3)
   parser.add_argument("--device", type=str, default=None, help="cpu | cuda:0 | auto")
@@ -66,6 +71,7 @@ def main() -> None:
   )
 
   from irb2400_rl.task.env_cfg import (
+    ACTION_TERM_NAME,
     Irb2400TrackingTaskParams,
     make_irb2400_tracking_env_cfg,
   )
@@ -75,7 +81,7 @@ def main() -> None:
   else:
     device = args.device
 
-  # Residual action is clipped to [-1, 1] before scaling inside the action term.
+  # Actions are clipped to [-1, 1] by the vec-env wrapper.
   clip_actions = 1.0
 
   env_cfg = make_irb2400_tracking_env_cfg(
@@ -87,12 +93,13 @@ def main() -> None:
     )
   )
 
-  # Configure residual torque action term safely (do not disturb baseline).
-  act = env_cfg.actions["residual_tau"]
-  act.residual_scale = float(args.residual_scale)
-  act.residual_clip = float(args.residual_clip)
-  act.residual_ramp_steps = int(args.residual_ramp_steps)
-  act.residual_filter_tau = float(args.residual_filter_tau)
+  act = env_cfg.actions[ACTION_TERM_NAME]
+  # Configure gain scheduling action term safely (do not disturb baseline at a=0).
+  if hasattr(act, "kp_delta_max"):
+    act.kp_delta_max = float(args.kp_delta_max)
+    act.kd_delta_max = float(args.kd_delta_max)
+    act.gain_ramp_steps = int(args.gain_ramp_steps)
+    act.gain_filter_tau = float(args.gain_filter_tau)
 
   # Configure reward weights (action regularization).
   env_cfg.rewards["action_l2"].weight = float(args.action_l2_weight)
