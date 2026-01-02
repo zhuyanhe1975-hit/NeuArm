@@ -1,0 +1,55 @@
+{
+  "name": "damping0_model100",
+  "ts_utc": "2026-01-02T10:07:31Z",
+  "train_run_dir": "logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_18-06-29",
+  "checkpoint": "logs/rsl_rl/neuarm_irb2400_tracking/2026-01-02_18-06-29/model_100.pt",
+  "physics": {
+    "mjcf": "assets/abb_irb2400/mjcf/irb2400_mjlab.xml",
+    "joint_default": {
+      "damping": 0.0,
+      "armature": 0.05
+    }
+  },
+  "eval": {
+    "site": "tcp",
+    "steps": 2000,
+    "device": "cuda:0",
+    "metrics": {
+      "joint_rmse_rad": {
+        "mean": 5.0186135922558606e-05,
+        "p95": 0.00013290037168189883,
+        "max": 0.00013652999768964946
+      },
+      "per_joint_rmse_rad": {
+        "j1": 7.726115291006863e-05,
+        "j2": 0.00010888717952184379,
+        "j3": 1.7564343579579145e-05,
+        "j4": 5.403249087976292e-05,
+        "j5": 5.5733580666128546e-05,
+        "j6": 1.6721858628443442e-05
+      },
+      "tcp_err_mm": {
+        "mean": 0.14666707813739777,
+        "p95": 0.3799892067909241,
+        "max": 0.3919479250907898
+      },
+      "residual_tau_abs_nm": {
+        "mean": 0.0,
+        "p95": 0.0,
+        "max": 0.0
+      }
+    }
+  },
+  "plots": {
+    "joint_error_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_100_bd1c09f6_tcp_2000_kpna_kdna_tauna/joint_error.png",
+    "joint_vel_error_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_100_bd1c09f6_tcp_2000_kpna_kdna_tauna/joint_vel_error.png",
+    "torque_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_100_bd1c09f6_tcp_2000_kpna_kdna_tauna/torque.png",
+    "action_png": "logs/rsl_rl/neuarm_irb2400_tracking/_eval/plots/model_100_bd1c09f6_tcp_2000_kpna_kdna_tauna/action.png"
+  },
+  "git": {
+    "code_commit": "2a6ab0dcd84c5486f1a63fd4a4b95f6f934c4f03",
+    "repo": "ssh://git@ssh.github.com:443/zhuyanhe1975-hit/NeuArm.git"
+  },
+  "note": "Milestone for frictionless-like dynamics: joint default damping set to 0.0 (armature 0.05). Logs/checkpoints live under logs/ (gitignored)."
+}
+
