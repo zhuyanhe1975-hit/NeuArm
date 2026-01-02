@@ -51,6 +51,12 @@ def _safe_stem(path_str: str | None) -> str:
   return p.stem.replace(".", "_")
 
 
+
+
+def _ckpt_id(path_str: str | None) -> str:
+  if not path_str:
+    return "none"
+  return hashlib.sha1(path_str.encode("utf-8")).hexdigest()[:8]
 def _save_eval_plots(
   *,
   out_dir: Path,
@@ -65,13 +71,6 @@ def _save_eval_plots(
   title_prefix: str,
 ) -> dict[str, str]:
   """Save diagnostic plots and return artifact paths.
-
-def _ckpt_id(path_str: str | None) -> str:
-  if not path_str:
-    return "none"
-  h = hashlib.sha1(path_str.encode("utf-8"), usedforsecurity=False).hexdigest()
-  return h[:8]
-
 
   Plots are designed to help spot:
   - segment boundary effects (phase resets)
