@@ -4,7 +4,7 @@
   <option timestep="0.002" gravity="0 0 -9.81" integrator="implicitfast"/>
 
   <default>
-    <joint damping="1.0" armature="0.05"/>
+    <joint damping="0.0" armature="0.05"/>
     <geom type="mesh" contype="0" conaffinity="0"/>
   </default>
 
