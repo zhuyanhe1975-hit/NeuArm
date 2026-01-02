@@ -189,13 +189,14 @@ def main() -> None:
   run_dir = Path(resolved_checkpoint).parent if resolved_checkpoint is not None else None
   action_mode = (args.action_mode or "auto").strip().lower()
   action_mode_source = "arg"
+  run_meta = None
   if action_mode == "auto":
     action_mode_source = "default"
     action_mode = "gain_sched"
     if run_dir is not None:
-      meta = load_run_metadata(run_dir)
-      if isinstance(meta, dict) and meta.get("action_mode"):
-        action_mode = str(meta["action_mode"]).strip().lower()
+      run_meta = load_run_metadata(run_dir)
+      if isinstance(run_meta, dict) and run_meta.get("action_mode"):
+        action_mode = str(run_meta["action_mode"]).strip().lower()
         action_mode_source = "run_record.json"
   if action_mode not in ("gain_sched", "residual"):
     print(f"[WARN] unsupported action_mode='{action_mode}', falling back to gain_sched")
@@ -249,6 +250,25 @@ def main() -> None:
       act_cfg.residual_filter_tau = float(args.residual_filter_tau)
     if args.residual_ramp_steps is not None and hasattr(act_cfg, "residual_ramp_steps"):
       act_cfg.residual_ramp_steps = int(args.residual_ramp_steps)
+    # If residual mode and not explicitly overridden, match train-time residual knobs.
+    if action_mode == "residual" and isinstance(run_meta, dict):
+      train_args = run_meta.get("args") if isinstance(run_meta.get("args"), dict) else {}
+      if isinstance(train_args, dict):
+        if args.residual_scale is None and hasattr(act_cfg, "residual_scale") and train_args.get("residual_scale") is not None:
+          act_cfg.residual_scale = float(train_args["residual_scale"])
+        if args.residual_clip is None and hasattr(act_cfg, "residual_clip") and train_args.get("residual_clip") is not None:
+          act_cfg.residual_clip = float(train_args["residual_clip"])
+        if args.residual_filter_tau is None and hasattr(act_cfg, "residual_filter_tau") and train_args.get("residual_filter_tau") is not None:
+          act_cfg.residual_filter_tau = float(train_args["residual_filter_tau"])
+        if args.residual_ramp_steps is None and hasattr(act_cfg, "residual_ramp_steps") and train_args.get("residual_ramp_steps") is not None:
+          act_cfg.residual_ramp_steps = int(train_args["residual_ramp_steps"])
+      print(
+        "[INFO] play residual params:"
+        f" scale={getattr(act_cfg,'residual_scale',None)}"
+        f" clip={getattr(act_cfg,'residual_clip',None)}"
+        f" ramp_steps={getattr(act_cfg,'residual_ramp_steps',None)}"
+        f" filter_tau={getattr(act_cfg,'residual_filter_tau',None)}"
+      )
 
   env_cfg.viewer.env_idx = int(args.env_idx)
   cam = (args.camera or "").strip().lower()
