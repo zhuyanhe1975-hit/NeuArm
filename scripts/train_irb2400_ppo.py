@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+
+import argparse
+
+
+def main() -> None:
+  parser = argparse.ArgumentParser()
+  parser.add_argument("--num-envs", type=int, default=1024)
+  # Policy/control update = sim_dt(1ms) * decimation(5) = 5ms.
+  parser.add_argument("--decimation", type=int, default=5)
+  parser.add_argument("--episode-length-s", type=float, default=6.0)
+  parser.add_argument("--effort-limit", type=float, default=300.0)
+  parser.add_argument("--device", type=str, default=None, help="cpu | cuda:0 | auto")
+  parser.add_argument("--max-iterations", type=int, default=1000)
+  parser.add_argument("--num-steps-per-env", type=int, default=32)
+  parser.add_argument("--save-interval", type=int, default=50)
+  parser.add_argument("--run-name", type=str, default="")
+  args = parser.parse_args()
+
+  repo_root = Path(__file__).resolve().parents[1]
+  sys.path.insert(0, str(repo_root / "src"))
+
+  from irb2400_rl.mjlab_bootstrap import ensure_mjlab_on_path
+
+  ensure_mjlab_on_path()
+
+  os.environ.setdefault("MUJOCO_GL", "egl")
+
+  import torch
+  from rsl_rl.runners import OnPolicyRunner
+
+  from mjlab.envs import ManagerBasedRlEnv
+  from mjlab.rl import (
+    RslRlOnPolicyRunnerCfg,
+    RslRlPpoActorCriticCfg,
+    RslRlPpoAlgorithmCfg,
+    RslRlVecEnvWrapper,
+  )
+
+  from irb2400_rl.task.env_cfg import (
+    Irb2400TrackingTaskParams,
+    make_irb2400_tracking_env_cfg,
+  )
+
+  if args.device in (None, "auto"):
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+  else:
+    device = args.device
+
+  # Residual action is clipped to [-1, 1] before scaling inside the action term.
+  clip_actions = 1.0
+
+  env_cfg = make_irb2400_tracking_env_cfg(
+    params=Irb2400TrackingTaskParams(
+      num_envs=args.num_envs,
+      decimation=args.decimation,
+      episode_length_s=args.episode_length_s,
+      effort_limit=args.effort_limit,
+    )
+  )
+
+  agent_cfg = RslRlOnPolicyRunnerCfg(
+    policy=RslRlPpoActorCriticCfg(
+      init_noise_std=0.2,
+      actor_obs_normalization=False,
+      critic_obs_normalization=False,
+      actor_hidden_dims=(256, 256, 128),
+      critic_hidden_dims=(256, 256, 128),
+      activation="elu",
+    ),
+    algorithm=RslRlPpoAlgorithmCfg(
+      learning_rate=3.0e-4,
+      num_learning_epochs=5,
+      num_mini_batches=4,
+      entropy_coef=0.005,
+      gamma=0.99,
+      lam=0.95,
+      desired_kl=0.01,
+      max_grad_norm=1.0,
+      value_loss_coef=1.0,
+      use_clipped_value_loss=True,
+      clip_param=0.2,
+      schedule="adaptive",
+    ),
+    experiment_name="neuarm_irb2400_tracking",
+    run_name=args.run_name,
+    logger="tensorboard",
+    num_steps_per_env=args.num_steps_per_env,
+    max_iterations=args.max_iterations,
+    save_interval=args.save_interval,
+  )
+
+  log_root = repo_root / "logs" / "rsl_rl" / agent_cfg.experiment_name
+  log_dir_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+  if agent_cfg.run_name:
+    log_dir_name += f"_{agent_cfg.run_name}"
+  log_dir = log_root / log_dir_name
+  log_dir.mkdir(parents=True, exist_ok=True)
+
+  print(f"[INFO] device={device} num_envs={args.num_envs} log_dir={log_dir}")
+
+  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  env = RslRlVecEnvWrapper(env, clip_actions=clip_actions)
+
+  runner = OnPolicyRunner(env, asdict(agent_cfg), str(log_dir), device=device)
+  runner.learn(num_learning_iterations=agent_cfg.max_iterations, init_at_random_ep_len=True)
+  env.close()
+
+
+if __name__ == "__main__":
+  main()
