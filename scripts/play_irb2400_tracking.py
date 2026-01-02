@@ -4,6 +4,7 @@ import argparse
 import os
 import re
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 
@@ -46,6 +47,56 @@ def _compute_env_origins_grid(num_envs: int, env_spacing: float) -> "list[list[f
   return origins
 
 
+class _RealTimeStepMixin:
+  """Drive simulation steps by wall-clock time instead of 'one step per frame'.
+
+  This keeps the animation real-time even when the native viewer is capped by
+  monitor refresh (VSync). Rendering may be 60Hz, but simulation can still run
+  at e.g. 200Hz by taking multiple env steps per rendered frame.
+  """
+
+  _rt_step_dt: float
+  _rt_accum_s: float
+
+  def _rt_init(self, step_dt: float) -> None:
+    self._rt_step_dt = float(step_dt)
+    self._rt_accum_s = 0.0
+
+  def tick(self) -> bool:  # type: ignore[override]
+    # Based on BaseViewer.tick, but step multiple times per frame as needed.
+    self._process_actions()
+
+    # Render-side sync (perturbations).
+    with self._render_timer.measure_time():
+      self.sync_viewer_to_env()
+
+      if not self._is_paused:
+        dt_wall = self._timer.tick()
+        self._rt_accum_s += float(dt_wall) * float(self._time_multiplier)
+
+        # Avoid spiraling after stalls (e.g., window dragged).
+        max_catchup_steps = 200
+        steps = min(int(self._rt_accum_s / max(self._rt_step_dt, 1e-9)), max_catchup_steps)
+        if steps > 0:
+          self._rt_accum_s -= steps * self._rt_step_dt
+          for _ in range(steps):
+            self.step_simulation()
+        else:
+          # Yield a bit if we are ahead of schedule.
+          remain = max(self._rt_step_dt - self._rt_accum_s, 0.0)
+          time.sleep(min(0.001, remain))
+      else:
+        # Keep updating the displayed pose while paused.
+        self._timer.tick()
+
+      self.sync_env_to_viewer()
+
+    self._accumulated_render_time += self._render_timer.measured_time
+    self._frame_count += 1
+    self._update_fps()
+    return True
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt (defaults to latest)")
@@ -65,7 +116,7 @@ def main() -> None:
   parser.add_argument(
     "--realtime",
     action="store_true",
-    help="Run viewer at real-time (wall clock) by setting fps ~= 1/step_dt (e.g., 200Hz for 5ms control step).",
+    help="Run at real-time (wall clock). This stays real-time even if native viewer is VSync-capped by stepping multiple env steps per rendered frame.",
   )
   args = parser.parse_args()
 
@@ -180,9 +231,11 @@ def main() -> None:
     print(f"[INFO] loaded policy from checkpoint: {resolved_checkpoint}")
 
   fps = float(args.fps)
+  sim_hz = 1.0 / max(float(env.unwrapped.step_dt), 1e-9)
   if args.realtime:
-    fps = 1.0 / max(float(env.unwrapped.step_dt), 1e-6)
-  print(f"[INFO] viewer fps={fps:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
+    print(f"[INFO] realtime=on render_fps={fps:.1f}Hz sim_hz={sim_hz:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
+  else:
+    print(f"[INFO] realtime=off fps={fps:.1f}Hz (step_dt={env.unwrapped.step_dt:.4f}s)")
   print("[INFO] native viewer keys: ENTER=reset SPACE=pause/resume -=slower +=faster ,/.=prev/next env (when num_envs>1)")
 
   num_steps = None if int(args.steps) <= 0 else int(args.steps)
@@ -244,7 +297,15 @@ def main() -> None:
 
             v.sync(state_only=True)
 
-      _GridEnvNativeViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
+      if args.realtime:
+        class _GridEnvNativeViewerRT(_RealTimeStepMixin, _GridEnvNativeViewer):
+          pass
+
+        viewer = _GridEnvNativeViewerRT(env, policy, frame_rate=fps)
+        viewer._rt_init(env.unwrapped.step_dt)
+      else:
+        viewer = _GridEnvNativeViewer(env, policy, frame_rate=fps)
+      viewer.run(num_steps=num_steps)
     else:
       # By default, render only the selected env. This avoids overlapping robots
       # when the scene spacing is not reflected in the native viewer.
@@ -253,7 +314,15 @@ def main() -> None:
           super().setup()
           self.vd = None
 
-      _SingleEnvNativeViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
+      if args.realtime:
+        class _SingleEnvNativeViewerRT(_RealTimeStepMixin, _SingleEnvNativeViewer):
+          pass
+
+        viewer = _SingleEnvNativeViewerRT(env, policy, frame_rate=fps)
+        viewer._rt_init(env.unwrapped.step_dt)
+      else:
+        viewer = _SingleEnvNativeViewer(env, policy, frame_rate=fps)
+      viewer.run(num_steps=num_steps)
   elif viewer_backend == "viser":
     ViserPlayViewer(env, policy, frame_rate=fps).run(num_steps=num_steps)
   else:
