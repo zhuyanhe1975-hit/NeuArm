@@ -16,6 +16,7 @@ python3 "$REPO_ROOT/scripts/train_irb2400_ppo.py" \
   --num-envs "$NUM_ENVS" \
   --max-iterations "$MAX_ITERS" \
   --action-mode gain_sched \
+  --no-friction \
   --track-q-std 0.25 \
   --kp-delta-max 0.15 \
   --kd-delta-max 0.15 \
@@ -25,4 +26,3 @@ python3 "$REPO_ROOT/scripts/train_irb2400_ppo.py" \
   --action-l2-weight -1e-2 \
   --action-rate-weight -5e-3 \
   --run-name "repro_damping0_model100"
-

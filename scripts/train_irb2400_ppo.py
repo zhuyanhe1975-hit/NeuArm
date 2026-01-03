@@ -32,6 +32,9 @@ def main() -> None:
   parser.add_argument("--ki", type=float, default=None, help="Integral gain (per joint). If unset, uses controller default.")
   parser.add_argument("--integral-limit", type=float, default=None, help="Integral windup limit (rad*s). If unset, uses controller default.")
   parser.add_argument("--preset", type=str, default="", help="Optional preset: fine")
+  parser.add_argument("--no-friction", action="store_true", help="Disable joint damping/frictionloss in the env (sets both to zeros).")
+  parser.add_argument("--dof-damping", type=str, default=None, help="Comma-separated 6 floats for dof_damping (N*m*s/rad).")
+  parser.add_argument("--dof-frictionloss", type=str, default=None, help="Comma-separated 6 floats for dof_frictionloss (N*m).")
   # Command distribution overrides (stress-test training).
   parser.add_argument("--cmd-sine-freq-lo", type=float, default=None, help="Override sine freq lower bound (Hz)")
   parser.add_argument("--cmd-sine-freq-hi", type=float, default=None, help="Override sine freq upper bound (Hz)")
@@ -113,12 +116,31 @@ def main() -> None:
   # Actions are clipped to [-1, 1] by the vec-env wrapper.
   clip_actions = 1.0
 
+  def _parse_6_floats(s: str) -> tuple[float, ...]:
+    parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+    if len(parts) != 6:
+      raise ValueError(f"Expected 6 comma-separated floats, got {len(parts)} from '{s}'")
+    return tuple(float(p) for p in parts)
+
+  dof_damping = None
+  dof_frictionloss = None
+  if args.no_friction:
+    dof_damping = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    dof_frictionloss = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+  if args.dof_damping is not None:
+    dof_damping = _parse_6_floats(args.dof_damping)
+  if args.dof_frictionloss is not None:
+    dof_frictionloss = _parse_6_floats(args.dof_frictionloss)
+
+  _default_params = Irb2400TrackingTaskParams()
   params = Irb2400TrackingTaskParams(
     num_envs=args.num_envs,
     decimation=args.decimation,
     episode_length_s=args.episode_length_s,
     effort_limit=args.effort_limit,
     action_mode=str(args.action_mode),
+    dof_damping=dof_damping if dof_damping is not None else _default_params.dof_damping,
+    dof_frictionloss=dof_frictionloss if dof_frictionloss is not None else _default_params.dof_frictionloss,
   )
   env_cfg = make_irb2400_tracking_env_cfg(params=params)
 

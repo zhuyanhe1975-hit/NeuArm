@@ -218,6 +218,23 @@ def main() -> None:
   parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
   parser.add_argument(
+    "--no-friction",
+    action="store_true",
+    help="Disable joint damping/frictionloss in the env (sets dof_damping and dof_frictionloss to zeros).",
+  )
+  parser.add_argument(
+    "--dof-damping",
+    type=str,
+    default=None,
+    help="Comma-separated 6 floats for dof_damping (N*m*s/rad), overrides env params.",
+  )
+  parser.add_argument(
+    "--dof-frictionloss",
+    type=str,
+    default=None,
+    help="Comma-separated 6 floats for dof_frictionloss (N*m), overrides env params.",
+  )
+  parser.add_argument(
     "--action-mode",
     type=str,
     default="auto",
@@ -306,8 +323,30 @@ def main() -> None:
     action_mode_source = "fallback"
   print(f"[INFO] action_mode={action_mode} (source={action_mode_source})")
 
+  def _parse_6_floats(s: str) -> tuple[float, ...]:
+    parts = [p.strip() for p in s.split(",") if p.strip() != ""]
+    if len(parts) != 6:
+      raise ValueError(f"Expected 6 comma-separated floats, got {len(parts)} from '{s}'")
+    return tuple(float(p) for p in parts)
+
+  dof_damping = None
+  dof_frictionloss = None
+  if args.no_friction:
+    dof_damping = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    dof_frictionloss = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+  if args.dof_damping is not None:
+    dof_damping = _parse_6_floats(args.dof_damping)
+  if args.dof_frictionloss is not None:
+    dof_frictionloss = _parse_6_floats(args.dof_frictionloss)
+
+  _default_params = Irb2400TrackingTaskParams()
   env_cfg = make_irb2400_tracking_env_cfg(
-    params=Irb2400TrackingTaskParams(num_envs=1, action_mode=action_mode),
+    params=Irb2400TrackingTaskParams(
+      num_envs=1,
+      action_mode=action_mode,
+      dof_damping=dof_damping if dof_damping is not None else _default_params.dof_damping,
+      dof_frictionloss=dof_frictionloss if dof_frictionloss is not None else _default_params.dof_frictionloss,
+    ),
     play=True,
   )
   # Optional: override command distribution (for stress-tests).

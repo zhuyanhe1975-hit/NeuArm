@@ -14,6 +14,6 @@ python3 "$REPO_ROOT/scripts/eval_irb2400_tracking.py" \
   --device "$DEVICE" \
   --checkpoint "$HERE/checkpoints/model_100.pt" \
   --action-mode gain_sched \
+  --no-friction \
   --steps "$STEPS" \
   --plots
-

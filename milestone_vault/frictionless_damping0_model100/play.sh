@@ -15,8 +15,8 @@ python3 "$REPO_ROOT/scripts/play_irb2400_tracking.py" \
   --device "$DEVICE" \
   --checkpoint "$HERE/checkpoints/model_100.pt" \
   --action-mode gain_sched \
+  --no-friction \
   --viewer "$VIEWER" \
   --num-envs "$NUM_ENVS" \
   --show-other-envs \
   --realtime
-
