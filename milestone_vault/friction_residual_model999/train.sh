@@ -12,6 +12,7 @@ source /home/yhzhu/miniconda3/etc/profile.d/conda.sh
 conda activate mjwarp_env
 
 python3 "$REPO_ROOT/scripts/train_irb2400_ppo.py" \
+  --seed 0 \
   --device "$DEVICE" \
   --num-envs "$NUM_ENVS" \
   --max-iterations "$MAX_ITERS" \
@@ -26,4 +27,3 @@ python3 "$REPO_ROOT/scripts/train_irb2400_ppo.py" \
   --action-rate-weight -5e-2 \
   --num-steps-per-env 32 \
   --run-name "repro_friction_residual_model999"
-

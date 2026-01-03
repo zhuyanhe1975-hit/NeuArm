@@ -1,0 +1,35 @@
+{
+  "seed": 0,
+  "command_override": {
+    "trajectory_type": "sine",
+    "sine_freq_hz_range": [0.2, 0.8],
+    "sine_cycles_range": [2, 4],
+    "joint_delta_scale": 0.05,
+    "joint_delta_scale_by_joint": [0.05, 0.05, 0.05, 0.05, 0.05, 0.005]
+  },
+  "controller": {
+    "action_mode": "residual",
+    "residual_scale": 10.0,
+    "residual_clip": 10.0,
+    "residual_ramp_steps": 0,
+    "residual_filter_tau": 0.03
+  },
+  "metrics": {
+    "joint_rmse_rad": {
+      "mean": 0.0033,
+      "p95": 0.0060,
+      "max": 0.0061
+    },
+    "tcp_err_mm": {
+      "mean": 7.707,
+      "p95": 18.916,
+      "max": 19.318
+    },
+    "residual_tau_abs_nm": {
+      "mean": 8.0607,
+      "p95": 8.5860,
+      "max": 9.2623
+    }
+  }
+}
+

@@ -217,6 +217,7 @@ def main() -> None:
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
   parser.add_argument("--site", type=str, default="tcp", help="Site name to evaluate: tcp | ee")
   parser.add_argument("--steps", type=int, default=2000)
+  parser.add_argument("--seed", type=int, default=None, help="Random seed for deterministic eval (affects command resampling).")
   parser.add_argument(
     "--no-friction",
     action="store_true",
@@ -273,6 +274,7 @@ def main() -> None:
 
   import numpy as np
   import torch
+  import random
   from rsl_rl.runners import OnPolicyRunner
 
   from mjlab.envs import ManagerBasedRlEnv
@@ -293,6 +295,18 @@ def main() -> None:
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
   else:
     device = args.device
+
+  if args.seed is not None:
+    seed = int(args.seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if str(device).startswith("cuda"):
+      try:
+        torch.cuda.manual_seed_all(seed)
+      except Exception:
+        pass
+    print(f"[INFO] seed={seed}")
 
   experiment_root = repo_root / "logs" / "rsl_rl" / "neuarm_irb2400_tracking"
 
@@ -423,7 +437,11 @@ def main() -> None:
       f" filter_tau={getattr(act_cfg,'residual_filter_tau',None)}"
     )
 
-  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  # Some mjlab builds accept a seed kwarg; fall back if not supported.
+  try:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, seed=args.seed)
+  except TypeError:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   vec_env = RslRlVecEnvWrapper(env, clip_actions=1.0)
 
   dt_s = float(getattr(env_cfg.sim.mujoco, "timestep", 0.001)) * float(getattr(env_cfg, "decimation", 1))

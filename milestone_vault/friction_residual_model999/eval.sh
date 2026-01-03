@@ -11,6 +11,7 @@ source /home/yhzhu/miniconda3/etc/profile.d/conda.sh
 conda activate mjwarp_env
 
 python3 "$REPO_ROOT/scripts/eval_irb2400_tracking.py" \
+  --seed 0 \
   --device "$DEVICE" \
   --checkpoint "$HERE/checkpoints/model_999.pt" \
   --action-mode residual \
@@ -20,4 +21,3 @@ python3 "$REPO_ROOT/scripts/eval_irb2400_tracking.py" \
   --residual-filter-tau 0.03 \
   --steps "$STEPS" \
   --plots
-

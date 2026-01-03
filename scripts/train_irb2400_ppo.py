@@ -62,6 +62,7 @@ def main() -> None:
   parser.add_argument("--action-l2-weight", type=float, default=-1e-2)
   parser.add_argument("--action-rate-weight", type=float, default=-5e-3)
   parser.add_argument("--device", type=str, default=None, help="cpu | cuda:0 | auto")
+  parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducible training.")
   parser.add_argument("--max-iterations", type=int, default=1000)
   parser.add_argument("--num-steps-per-env", type=int, default=32)
   parser.add_argument("--save-interval", type=int, default=50)
@@ -85,6 +86,8 @@ def main() -> None:
   os.environ.setdefault("MUJOCO_GL", "egl")
 
   import torch
+  import random
+  import numpy as np
   from rsl_rl.runners import OnPolicyRunner
 
   from mjlab.envs import ManagerBasedRlEnv
@@ -112,6 +115,18 @@ def main() -> None:
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
   else:
     device = args.device
+
+  if args.seed is not None:
+    seed = int(args.seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if str(device).startswith("cuda"):
+      try:
+        torch.cuda.manual_seed_all(seed)
+      except Exception:
+        pass
+    print(f"[INFO] seed={seed}")
 
   # Actions are clipped to [-1, 1] by the vec-env wrapper.
   clip_actions = 1.0
@@ -283,7 +298,10 @@ def main() -> None:
 
   print(f"[INFO] device={device} num_envs={args.num_envs} log_dir={log_dir}")
 
-  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  try:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, seed=args.seed)
+  except TypeError:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   env = RslRlVecEnvWrapper(env, clip_actions=clip_actions)
 
   runner = OnPolicyRunner(env, asdict(agent_cfg), str(log_dir), device=device)

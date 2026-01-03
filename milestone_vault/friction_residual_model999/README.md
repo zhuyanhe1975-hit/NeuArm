@@ -8,9 +8,8 @@
 
 ## Metrics (eval)
 
-- Joint RMSE (rad): mean `0.002163`, p95 `0.003687`, max `0.003796`
-- TCP error (mm): mean `6.245`, p95 `10.417`, max `10.863`
-- Residual |tau| (N·m): mean `8.331`, p95 `8.569`, max `8.885`
+- Original sealed (2026-01-02): TCP mean `6.245mm`, Joint RMSE mean `0.002163rad`, Residual p95 `8.569N·m`
+- Deterministic replay (`seed=0`): TCP mean `7.707mm`, Joint RMSE mean `0.0033rad`, Residual p95 `8.586N·m`
 
 ## Plots
 
@@ -24,4 +23,3 @@
 - Train: `bash train.sh`
 - Eval: `bash eval.sh`
 - Replay (viewer): `bash play.sh`
-

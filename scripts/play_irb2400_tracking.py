@@ -101,6 +101,7 @@ def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--checkpoint", type=str, default=None, help="Path to rsl_rl model_*.pt (defaults to latest)")
   parser.add_argument("--device", type=str, default="auto", help="cpu | cuda:0 | auto")
+  parser.add_argument("--seed", type=int, default=None, help="Random seed for deterministic playback (affects command resampling).")
   parser.add_argument(
     "--no-friction",
     action="store_true",
@@ -163,11 +164,25 @@ def main() -> None:
   ensure_mjlab_on_path()
 
   import torch
+  import random
+  import numpy as np
 
   if args.device == "auto":
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
   else:
     device = args.device
+
+  if args.seed is not None:
+    seed = int(args.seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if str(device).startswith("cuda"):
+      try:
+        torch.cuda.manual_seed_all(seed)
+      except Exception:
+        pass
+    print(f"[INFO] seed={seed}")
 
   # Prefer native GUI when a display is available.
   if args.viewer == "auto":
@@ -326,7 +341,10 @@ def main() -> None:
   else:
     raise ValueError(f"Unsupported --camera '{args.camera}', expected world|root|link6")
 
-  env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
+  try:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device, seed=args.seed)
+  except TypeError:
+    env = ManagerBasedRlEnv(cfg=env_cfg, device=device)
   env = RslRlVecEnvWrapper(env, clip_actions=1.0)
 
   if resolved_checkpoint is None:
