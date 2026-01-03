@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
+
+DEVICE="${DEVICE:-cuda:0}"
+STEPS="${STEPS:-2000}"
+
+source /home/yhzhu/miniconda3/etc/profile.d/conda.sh
+conda activate mjwarp_env
+
+python3 "$REPO_ROOT/scripts/eval_irb2400_tracking.py" \
+  --device "$DEVICE" \
+  --checkpoint "$HERE/checkpoints/model_999.pt" \
+  --action-mode residual \
+  --residual-scale 10 \
+  --residual-clip 10 \
+  --residual-ramp-steps 0 \
+  --residual-filter-tau 0.03 \
+  --steps "$STEPS" \
+  --plots
+

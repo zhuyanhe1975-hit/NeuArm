@@ -1,0 +1,119 @@
+{
+  "ts_utc": "2026-01-02T14:02:51Z",
+  "cwd": "/home/yhzhu/Industrial Robot/NeuArm_mjlab",
+  "argv": [
+    "scripts/train_irb2400_ppo.py",
+    "--residual-ramp-steps",
+    "0",
+    "--track-q-std",
+    "0.05",
+    "--num-envs",
+    "4096",
+    "--action-mode",
+    "residual",
+    "--residual-scale",
+    "10",
+    "--residual-clip",
+    "10",
+    "--action-l2-weight=-1e-3",
+    "--action-rate-weight=-5e-2"
+  ],
+  "repo_root": "/home/yhzhu/Industrial Robot/NeuArm_mjlab",
+  "git": {
+    "commit": "48b545bee04a2394a858113b35e07fff96d00c9f",
+    "branch": "main",
+    "dirty": false,
+    "remote_origin": "ssh://git@ssh.github.com:443/zhuyanhe1975-hit/NeuArm.git"
+  },
+  "args": {
+    "num_envs": 4096,
+    "decimation": 5,
+    "episode_length_s": 6.0,
+    "effort_limit": 300.0,
+    "track_q_std": 0.05,
+    "track_qd_std": 1.5,
+    "preset": "",
+    "cmd_sine_freq_lo": null,
+    "cmd_sine_freq_hi": null,
+    "cmd_sine_cycles_lo": null,
+    "cmd_sine_cycles_hi": null,
+    "cmd_joint_delta_scale": null,
+    "cmd_j6_scale": null,
+    "action_mode": "residual",
+    "kp_delta_max": 0.15,
+    "kd_delta_max": 0.15,
+    "gain_ramp_steps": 500000,
+    "gain_filter_tau": 0.03,
+    "residual_scale": 10.0,
+    "residual_clip": 10.0,
+    "residual_ramp_steps": 0,
+    "residual_filter_tau": 0.03,
+    "action_l2_weight": -0.001,
+    "action_rate_weight": -0.05,
+    "device": null,
+    "max_iterations": 1000,
+    "num_steps_per_env": 32,
+    "save_interval": 50,
+    "run_name": "",
+    "resume": "",
+    "resume_latest": false,
+    "resume_no_optimizer": false,
+    "init_noise_std": 0.2,
+    "no_record": false
+  },
+  "device": "cuda:0",
+  "action_mode": "residual",
+  "env_params": {
+    "num_envs": 4096,
+    "decimation": 5,
+    "episode_length_s": 6.0,
+    "effort_limit": 300.0,
+    "traj_segment_time_range": [
+      0.6,
+      1.8
+    ],
+    "traj_joint_delta_scale": 0.05,
+    "dof_damping": [
+      2.0,
+      2.0,
+      1.5,
+      0.4,
+      0.3,
+      0.2
+    ],
+    "dof_frictionloss": [
+      8.0,
+      8.0,
+      6.0,
+      1.5,
+      1.0,
+      0.5
+    ],
+    "action_mode": "residual"
+  },
+  "env": {
+    "sim_dt_s": 0.001,
+    "decimation": 5,
+    "step_dt_s": 0.005
+  },
+  "command_override": {
+    "trajectory_type": "sine",
+    "sine_freq_hz_range": [
+      0.2,
+      0.8
+    ],
+    "sine_cycles_range": [
+      2,
+      4
+    ],
+    "joint_delta_scale": 0.05,
+    "joint_delta_scale_by_joint": [
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.05,
+      0.005
+    ]
+  }
+}

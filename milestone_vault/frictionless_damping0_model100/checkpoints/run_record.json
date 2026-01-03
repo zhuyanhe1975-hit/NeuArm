@@ -1,0 +1,43 @@
+{
+  "ts_utc": "2026-01-02T10:06:29Z",
+  "cwd": "/home/yhzhu/Industrial Robot/NeuArm_mjlab",
+  "argv": [
+    "scripts/train_irb2400_ppo.py"
+  ],
+  "repo_root": "/home/yhzhu/Industrial Robot/NeuArm_mjlab",
+  "git": {
+    "commit": "65cb3357029ada59c7b6a25e925d42338c7924ef",
+    "branch": "main",
+    "dirty": true,
+    "remote_origin": "ssh://git@ssh.github.com:443/zhuyanhe1975-hit/NeuArm.git"
+  },
+  "args": {
+    "num_envs": 1024,
+    "decimation": 5,
+    "episode_length_s": 6.0,
+    "effort_limit": 300.0,
+    "track_q_std": 0.25,
+    "preset": "",
+    "kp_delta_max": 0.15,
+    "kd_delta_max": 0.15,
+    "gain_ramp_steps": 500000,
+    "gain_filter_tau": 0.03,
+    "residual_scale": 0.0,
+    "residual_clip": 0.0,
+    "residual_ramp_steps": 0,
+    "residual_filter_tau": 0.0,
+    "action_l2_weight": -0.01,
+    "action_rate_weight": -0.005,
+    "device": null,
+    "max_iterations": 1000,
+    "num_steps_per_env": 32,
+    "save_interval": 50,
+    "run_name": "",
+    "resume": "",
+    "resume_latest": false,
+    "resume_no_optimizer": false,
+    "init_noise_std": 0.2,
+    "no_record": false
+  },
+  "device": "cuda:0"
+}
